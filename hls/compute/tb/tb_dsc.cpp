@@ -1,0 +1,315 @@
+// tb_dsc.cpp — C-sim testbench: baseline kernels vs golden model, bit-exact.
+//
+// Uses synthetic data from a fixed-seed generator. Once Kevin's golden vectors
+// exist, add a test that loads them from file alongside these.
+//
+// Each test reports how many outputs landed strictly inside (0, ReLU6 max): a test
+// where everything clamps to 0 or 6 would pass while checking almost nothing.
+
+#include <stdio.h>
+#include <stdint.h>
+#include "dsc_types.h"
+#include "dsc_kernels.h"
+#include "dsc_golden.h"
+
+// ---- deterministic RNG -------------------------------------------------------
+static uint32_t rng_state = 0x12345678u;
+static uint32_t rng() {  // xorshift32
+    rng_state ^= rng_state << 13;
+    rng_state ^= rng_state >> 17;
+    rng_state ^= rng_state << 5;
+    return rng_state;
+}
+static int rand_range(int lo, int hi) {  // inclusive
+    return lo + (int)(rng() % (uint32_t)(hi - lo + 1));
+}
+
+// ---- buffers (static: too big for a comfortable stack) ------------------------
+static int   g_dw_in[DW_C][DW_H][DW_W];
+static int   g_dw_wt[DW_C][DW_K][DW_K];
+static int   g_dw_b[DW_C];
+static int   g_dw_out[DW_C][DW_HO_MAX][DW_WO_MAX];
+static act_t k_dw_in[DW_C][DW_H][DW_W];
+static wgt_t k_dw_wt[DW_C][DW_K][DW_K];
+static acc_t k_dw_b[DW_C];
+static act_t k_dw_out[DW_C][DW_HO_MAX][DW_WO_MAX];
+
+static int   g_pw_in[PW_C_IN][PW_H][PW_W];
+static int   g_pw_wt[PW_C_OUT][PW_C_IN];
+static int   g_pw_b[PW_C_OUT];
+static int   g_pw_out[PW_C_OUT][PW_H][PW_W];
+static act_t k_pw_in[PW_C_IN][PW_H][PW_W];
+static wgt_t k_pw_wt[PW_C_OUT][PW_C_IN];
+static acc_t k_pw_b[PW_C_OUT];
+static act_t k_pw_out[PW_C_OUT][PW_H][PW_W];
+
+static int g_failures = 0;
+
+// ---- data generation -----------------------------------------------------------
+struct GenParams {
+    int act_lo, act_hi;
+    int wgt_lo, wgt_hi;
+    int bias_lo, bias_hi;
+    int zero_wgt_pct;   // probability (0-100) a weight is forced to zero
+};
+
+static int gen_wgt(const GenParams& p) {
+    if ((int)(rng() % 100) < p.zero_wgt_pct) return 0;
+    return rand_range(p.wgt_lo, p.wgt_hi);
+}
+
+static void gen_dw(const GenParams& p) {
+    for (int c = 0; c < DW_C; c++) {
+        for (int y = 0; y < DW_H; y++)
+            for (int x = 0; x < DW_W; x++)
+                g_dw_in[c][y][x] = rand_range(p.act_lo, p.act_hi);
+        for (int ky = 0; ky < DW_K; ky++)
+            for (int kx = 0; kx < DW_K; kx++)
+                g_dw_wt[c][ky][kx] = gen_wgt(p);
+        g_dw_b[c] = rand_range(p.bias_lo, p.bias_hi);
+    }
+}
+
+static void gen_pw(const GenParams& p) {
+    for (int c = 0; c < PW_C_IN; c++)
+        for (int y = 0; y < PW_H; y++)
+            for (int x = 0; x < PW_W; x++)
+                g_pw_in[c][y][x] = rand_range(p.act_lo, p.act_hi);
+    for (int k = 0; k < PW_C_OUT; k++) {
+        for (int c = 0; c < PW_C_IN; c++)
+            g_pw_wt[k][c] = gen_wgt(p);
+        g_pw_b[k] = rand_range(p.bias_lo, p.bias_hi);
+    }
+}
+
+// ---- run + compare -------------------------------------------------------------
+static void run_dw(const char* name, int stride) {
+    for (int c = 0; c < DW_C; c++) {
+        for (int y = 0; y < DW_H; y++)
+            for (int x = 0; x < DW_W; x++)
+                k_dw_in[c][y][x] = (act_t)g_dw_in[c][y][x];
+        for (int ky = 0; ky < DW_K; ky++)
+            for (int kx = 0; kx < DW_K; kx++)
+                k_dw_wt[c][ky][kx] = (wgt_t)g_dw_wt[c][ky][kx];
+        k_dw_b[c] = (acc_t)g_dw_b[c];
+    }
+    golden_depthwise(g_dw_in, g_dw_wt, g_dw_b, stride, g_dw_out);
+    depthwise_top(k_dw_in, k_dw_wt, k_dw_b, stride, k_dw_out);
+
+    const int ho = dw_out_dim(DW_H, stride), wo = dw_out_dim(DW_W, stride);
+    int mism = 0, interior = 0, total = 0;
+    for (int c = 0; c < DW_C; c++)
+        for (int y = 0; y < ho; y++)
+            for (int x = 0; x < wo; x++) {
+                int g = g_dw_out[c][y][x], k = (int)k_dw_out[c][y][x];
+                total++;
+                if (g > 0 && g < ACT_RELU6_MAX) interior++;
+                if (g != k) {
+                    if (mism < 5)
+                        printf("    mismatch c=%d y=%d x=%d golden=%d kernel=%d\n", c, y, x, g, k);
+                    mism++;
+                }
+            }
+    printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
+           mism ? "FAIL" : "PASS", name, total, interior, mism);
+    if (mism) g_failures++;
+}
+
+static void run_pw(const char* name, int h, int w) {
+    for (int c = 0; c < PW_C_IN; c++)
+        for (int y = 0; y < PW_H; y++)
+            for (int x = 0; x < PW_W; x++)
+                k_pw_in[c][y][x] = (act_t)g_pw_in[c][y][x];
+    for (int k = 0; k < PW_C_OUT; k++) {
+        for (int c = 0; c < PW_C_IN; c++)
+            k_pw_wt[k][c] = (wgt_t)g_pw_wt[k][c];
+        k_pw_b[k] = (acc_t)g_pw_b[k];
+    }
+    golden_pointwise(g_pw_in, g_pw_wt, g_pw_b, h, w, g_pw_out);
+    pointwise_top(k_pw_in, k_pw_wt, k_pw_b, h, w, k_pw_out);
+
+    int mism = 0, interior = 0, total = 0;
+    for (int k = 0; k < PW_C_OUT; k++)
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int g = g_pw_out[k][y][x], kk = (int)k_pw_out[k][y][x];
+                total++;
+                if (g > 0 && g < ACT_RELU6_MAX) interior++;
+                if (g != kk) {
+                    if (mism < 5)
+                        printf("    mismatch k=%d y=%d x=%d golden=%d kernel=%d\n", k, y, x, g, kk);
+                    mism++;
+                }
+            }
+    printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
+           mism ? "FAIL" : "PASS", name, total, interior, mism);
+    if (mism) g_failures++;
+}
+
+// ---- zero-block skipping (pointwise) -------------------------------------------
+// Block-structured pruning: each PW_UNROLL-wide weight block of each output channel is
+// zeroed with probability block_zero_pct. Also used with block_zero_pct = 0 plus the
+// GenParams zero_wgt_pct for unstructured (per-weight) zeros.
+static void gen_pw_blocks(const GenParams& p, int block_zero_pct) {
+    gen_pw(p);
+    for (int k = 0; k < PW_C_OUT; k++)
+        for (int cb = 0; cb < PW_CBLKS; cb++)
+            if ((int)(rng() % 100) < block_zero_pct)
+                for (int u = 0; u < PW_UNROLL; u++)
+                    g_pw_wt[k][cb * PW_UNROLL + u] = 0;
+}
+
+// Expected schedule length, computed independently of the kernel: per output channel,
+// the number of blocks with any nonzero weight, but at least 1 (bias-only entry).
+static int expected_sched_len() {
+    int total = 0;
+    for (int k = 0; k < PW_C_OUT; k++) {
+        int nz_blocks = 0;
+        for (int cb = 0; cb < PW_CBLKS; cb++) {
+            bool nz = false;
+            for (int u = 0; u < PW_UNROLL; u++)
+                if (g_pw_wt[k][cb * PW_UNROLL + u] != 0) nz = true;
+            if (nz) nz_blocks++;
+        }
+        total += nz_blocks > 0 ? nz_blocks : 1;
+    }
+    return total;
+}
+
+// Runs pointwise_skip_top with skipping on and off; both must match the golden model
+// bit-exactly, and the schedule lengths must match the independent expectation.
+static void run_pw_skip(const char* name, int h, int w) {
+    for (int c = 0; c < PW_C_IN; c++)
+        for (int y = 0; y < PW_H; y++)
+            for (int x = 0; x < PW_W; x++)
+                k_pw_in[c][y][x] = (act_t)g_pw_in[c][y][x];
+    int zero_wgts = 0;
+    for (int k = 0; k < PW_C_OUT; k++) {
+        for (int c = 0; c < PW_C_IN; c++) {
+            k_pw_wt[k][c] = (wgt_t)g_pw_wt[k][c];
+            if (g_pw_wt[k][c] == 0) zero_wgts++;
+        }
+        k_pw_b[k] = (acc_t)g_pw_b[k];
+    }
+    golden_pointwise(g_pw_in, g_pw_wt, g_pw_b, h, w, g_pw_out);
+
+    const int dense_len = PW_C_OUT * PW_CBLKS;
+    const int exp_len = expected_sched_len();
+    int mism = 0, interior = 0, total = 0;
+    int len_skip = -1, len_dense = -1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const bool skip_en = (pass == 0);
+        int len = -1;
+        pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, h, w, skip_en, k_pw_out, len);
+        (skip_en ? len_skip : len_dense) = len;
+        for (int k = 0; k < PW_C_OUT; k++)
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int g = g_pw_out[k][y][x], kk = (int)k_pw_out[k][y][x];
+                    if (skip_en) {
+                        total++;
+                        if (g > 0 && g < ACT_RELU6_MAX) interior++;
+                    }
+                    if (g != kk) {
+                        if (mism < 5)
+                            printf("    mismatch (skip_en=%d) k=%d y=%d x=%d golden=%d kernel=%d\n",
+                                   (int)skip_en, k, y, x, g, kk);
+                        mism++;
+                    }
+                }
+    }
+
+    bool len_ok = (len_skip == exp_len) && (len_dense == dense_len);
+    if (!len_ok)
+        printf("    schedule length: skip=%d (expected %d), bypass=%d (expected %d)\n",
+               len_skip, exp_len, len_dense, dense_len);
+    bool ok = (mism == 0) && len_ok;
+    printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
+           ok ? "PASS" : "FAIL", name, total, interior, mism);
+    printf("       weights zero %5.1f%% | cycles/pixel %3d of %3d | MAC cycles skipped %5.1f%%\n",
+           100.0 * zero_wgts / (PW_C_OUT * PW_C_IN), len_skip, dense_len,
+           100.0 * (dense_len - len_skip) / dense_len);
+    if (!ok) g_failures++;
+}
+
+// Requant checked directly over every accumulator value near the interesting
+// boundaries (rounding ties, 0, ReLU6 max) plus a wide sweep.
+static void test_requant() {
+    int mism = 0, checked = 0;
+    for (long long a = -40000; a <= 40000; a++) {
+        int g = golden_requant_relu6(a);
+        int k = (int)requant_relu6((acc_t)a);
+        checked++;
+        if (g != k) {
+            if (mism < 5) printf("    requant mismatch acc=%lld golden=%d kernel=%d\n", a, g, k);
+            mism++;
+        }
+    }
+    const long long extremes[] = {-(1LL << 24), (1LL << 24), -(1LL << 24) + 63, (1LL << 24) - 65};
+    for (int i = 0; i < 4; i++) {
+        int g = golden_requant_relu6(extremes[i]);
+        int k = (int)requant_relu6((acc_t)extremes[i]);
+        checked++;
+        if (g != k) mism++;
+    }
+    // Spot-check the spec itself, not just agreement: 64 is exactly 0.5 LSB -> rounds up to 1.
+    if (golden_requant_relu6(63) != 0 || golden_requant_relu6(64) != 1 ||
+        golden_requant_relu6(-64) != 0 || golden_requant_relu6(1LL << 20) != ACT_RELU6_MAX) {
+        printf("    golden requant spot-check failed\n");
+        mism++;
+    }
+    printf("[%s] %-34s %5d values,  %d mismatches\n",
+           mism ? "FAIL" : "PASS", "requant_relu6 sweep", checked, mism);
+    if (mism) g_failures++;
+}
+
+int main() {
+    test_requant();
+
+    //                 act       weight      bias            zero%
+    GenParams dw_rand = {0, 192, -128, 127, -20000, 20000, 0};
+    GenParams dw_sparse = dw_rand;  dw_sparse.zero_wgt_pct = 50;
+    GenParams dw_sat = {255, 255, 127, 127, 0, 0, 0};          // all max -> clamps at 6
+    GenParams dw_neg = {255, 255, -128, -128, 0, 0, 0};        // most negative -> clamps at 0
+    GenParams dw_zero = {0, 192, 0, 0, -20000, 20000, 0};      // zero weights -> bias only
+    GenParams dw_full = {0, 255, -128, 127, -20000, 20000, 0}; // full act range
+
+    gen_dw(dw_rand);   run_dw("depthwise random, stride 1", 1);
+    gen_dw(dw_rand);   run_dw("depthwise random, stride 2", 2);
+    gen_dw(dw_full);   run_dw("depthwise full act range, stride 1", 1);
+    gen_dw(dw_sparse); run_dw("depthwise 50% zero weights", 1);
+    gen_dw(dw_sat);    run_dw("depthwise saturate high", 1);
+    gen_dw(dw_neg);    run_dw("depthwise saturate low", 2);
+    gen_dw(dw_zero);   run_dw("depthwise all-zero weights", 1);
+
+    GenParams pw_rand = {0, 192, -32, 31, -20000, 20000, 0};
+    GenParams pw_sparse = pw_rand;  pw_sparse.zero_wgt_pct = 50;
+    GenParams pw_wide = {0, 255, -128, 127, -200000, 200000, 0};
+    GenParams pw_sat = {255, 255, 127, 127, 0, 0, 0};
+
+    gen_pw(pw_rand);   run_pw("pointwise random 16x16", PW_H, PW_W);
+    gen_pw(pw_rand);   run_pw("pointwise random 8x8 (stride-2 dw)", 8, 8);
+    gen_pw(pw_sparse); run_pw("pointwise 50% zero weights", PW_H, PW_W);
+    gen_pw(pw_wide);   run_pw("pointwise full weight range", PW_H, PW_W);
+    gen_pw(pw_sat);    run_pw("pointwise saturate high", PW_H, PW_W);
+
+    // Zero-block skipping: block-structured sparsity sweep, plus cases that stress
+    // the schedule (all zero, unstructured zeros that rarely fill a whole block).
+    printf("\n-- pointwise zero-block skipping (skip on and bypass both checked) --\n");
+    gen_pw_blocks(pw_rand, 0);   run_pw_skip("skip: dense (0% blocks pruned)", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 30);  run_pw_skip("skip: 30% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: 50% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 70);  run_pw_skip("skip: 70% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 90);  run_pw_skip("skip: 90% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 100); run_pw_skip("skip: all weights zero", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: 50% blocks pruned, 8x8", 8, 8);
+    gen_pw_blocks(pw_sparse, 0); run_pw_skip("skip: 50% unstructured zeros", PW_H, PW_W);
+
+    if (g_failures) {
+        printf("\nC-SIM FAILED: %d test(s) failed\n", g_failures);
+        return 1;
+    }
+    printf("\nC-SIM PASSED: all tests bit-exact against golden model\n");
+    return 0;
+}

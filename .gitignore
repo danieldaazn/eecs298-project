@@ -1,0 +1,5 @@
+# Local C-sim build output
+hls/**/build/
+# Vitis HLS project directories and logs
+hls/**/proj_*/
+*.log
