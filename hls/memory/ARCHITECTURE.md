@@ -47,7 +47,7 @@ DRAM ──► read_input ──s_in──► window_gen ──s_win──► dw
 ```
 
 `dsc_top` first loads the parameter blob and builds the skip schedule (once per call,
-about 570 cycles), then runs the dataflow region above.
+about 770 cycles), then runs the dataflow region above.
 
 | Stream | Element | Rate | Why this width |
 |---|---|---|---|
@@ -61,7 +61,9 @@ column are the bottom/right zero padding, fed without reading the stream. For ea
 grid point it walks the C channels at II=1: two rows come from the line buffer, the
 new row from `s_in`, and a 2-column history per channel (`hist[C][3][2]`) forms the
 window. Top/left padding is masking, so the buffers are never cleared between frames.
-The back-to-back-frame test checks that no stale data leaks across frames.
+`line` and `hist` are `static` so C-sim keeps their contents between calls like the
+RAMs do; the back-to-back-frame test then really runs frames 2–3 on top of frame 1's
+leftovers.
 
 ## Cycle model and bottleneck
 
@@ -189,7 +191,7 @@ and the driver.
 ## Week 10 plan: latency breakdown
 
 Measure total cycles (ap_start→ap_done) at each sparsity point and both strides, then
-compare against the model above: prologue (~570) + max(pointwise, window_gen) +
+compare against the model above: prologue (~770) + max(pointwise, window_gen) +
 drain. The gap is the "memory-bound vs compute-bound" evidence: given the bandwidth
 numbers, it should be small at stride 1, and show the line-buffer ceiling at stride 2.
 
@@ -201,7 +203,8 @@ numbers, it should be small at stride 1, and show the line-buffer ceiling at str
    with a PIPO `buf`. Fallback: remove that pragma (single buffer, see above).
 3. Array partitioning of `pw_wt` / `dw_wt` propagating from `dsc_top` into the
    dataflow region's processes (needed for 8-wide and 9-wide reads at II=1).
-4. `load_params` II (stated as 1–2 per loop; it's a ~200-cycle prologue either way).
+4. `load_params` II (pragmas assume one write port per bank: II 1/4/2/4 per loop,
+   ~380 cycles). Partitioning the biases would cut it, but it's ~1 % of a call.
 5. Timing at 200 MHz, resources, co-sim pass, and whether Daniel's cycle counts are
    unchanged after the refactor.
 

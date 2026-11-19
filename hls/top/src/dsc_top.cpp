@@ -39,15 +39,15 @@ LP_DW_WT:
     }
 LP_DW_B:
     for (int b = 0; b < DW_C / 4; b++) {
-        // 4 writes per beat into one unpartitioned (dual-port) array: II=2.
-#pragma HLS PIPELINE II=2
+        // 4 writes per beat into one unpartitioned array (1 write port): II=4.
+#pragma HLS PIPELINE II=4
         const axi_word_t w = p[P_DW_B + b];
         for (int j = 0; j < 4; j++) dw_b[4 * b + j] = word_i32(w, j);
     }
 LP_PW_WT:
     for (int b = 0; b < PW_C_OUT * PW_ROW_BEATS; b++) {
-        // 16 bytes into PW_UNROLL cyclic banks = 2 writes per bank: II=1 on dual port.
-#pragma HLS PIPELINE II=1
+        // 16 bytes into PW_UNROLL cyclic banks = 2 writes per bank, 1 write port: II=2.
+#pragma HLS PIPELINE II=2
         const axi_word_t w = p[P_PW_WT + b];
         const int k  = b / PW_ROW_BEATS;
         const int c0 = (b % PW_ROW_BEATS) * AXI_BYTES;
@@ -55,7 +55,7 @@ LP_PW_WT:
     }
 LP_PW_B:
     for (int b = 0; b < PW_C_OUT / 4; b++) {
-#pragma HLS PIPELINE II=2
+#pragma HLS PIPELINE II=4
         const axi_word_t w = p[P_PW_B + b];
         for (int j = 0; j < 4; j++) pw_b[4 * b + j] = word_i32(w, j);
     }
@@ -171,8 +171,9 @@ void dsc_top(const axi_word_t *in,
     acc_t pw_b[PW_C_OUT];
     pw_sched_t sched[PW_C_OUT * PW_CBLKS];
 
-    // Once per call: weights in, skip schedule built (~PARAM_BEATS + 3*PW_C_OUT*
-    // PW_CBLKS cycles, before the pipeline starts).
+    // Once per call, before the pipeline starts: weights in (~380 cycles at the IIs in
+    // load_params) and skip schedule built (~380 cycles): ~770 cycles, ~1% of a dense
+    // stride-1 call.
     load_params(params, dw_wt, dw_b, pw_wt, pw_b);
     int n;
     pw_build_sched(pw_wt, skip_en, sched, n);

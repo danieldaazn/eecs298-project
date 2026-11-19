@@ -1,9 +1,9 @@
 // dsc_types.h — numeric types and layer dimensions for the compute core.
 //
 // !!! SHARED INTERFACE — PLACEHOLDER VALUES !!!
-// The widths and scales below are Daniel's proposal and have NOT yet been signed
-// off by Hank (buffer/stream widths) or Kevin (quantization export). Do not treat
-// them as final; change them only by team agreement (see CLAUDE.md).
+// The widths and scales below are Daniel's proposal. Signed off by Hank (buffer/
+// stream widths) on 2026-11-19; NOT yet signed off by Kevin (quantization export).
+// Do not treat them as final; change them only by team agreement (see CLAUDE.md).
 //
 // Representation: every value is stored as its raw two's-complement integer with an
 // implied binary point (Q format). This is bit-for-bit what ap_fixed / ap_ufixed hold

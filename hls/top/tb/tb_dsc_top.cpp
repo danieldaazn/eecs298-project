@@ -192,9 +192,15 @@ int main() {
         golden_pointwise(g_dw_out, g_pw_wt, g_pw_b, DW_HO_MAX, DW_WO_MAX, g_pw_out);
         int bad = 0;
         const int strides[] = {0, 3, -1};
+        const axi_word_t sentinel = ~(axi_word_t)0;
+        const int out_beats = DW_HO_MAX * DW_WO_MAX * OUT_PIX_BEATS;
         for (int t = 0; t < 3; t++) {
-            int len;
+            for (int i = 0; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++) d_out[i] = sentinel;
+            int len = -1;
             dsc_top(d_in, d_params, d_out, strides[t], true, len);
+            if (len != expected_sched_len()) bad++;
+            for (int i = out_beats; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++)
+                if (d_out[i] != sentinel) bad++;
             for (int y = 0; y < DW_HO_MAX; y++)
                 for (int x = 0; x < DW_WO_MAX; x++)
                     for (int o = 0; o < PW_C_OUT; o++) {

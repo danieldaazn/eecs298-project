@@ -32,9 +32,11 @@ READ_FRAME:
 // they are kept so the very first frame doesn't depend on power-up RAM contents.
 // Mutation testing can't tell them apart in C-sim for that reason.)
 void window_gen(hls::stream<axi_word_t> &s_in, hls::stream<win_t> &s_win, int stride) {
-    act_t line[DW_K - 1][DW_W][DW_C];
+    // static: the RAMs keep their contents between calls in hardware, so C-sim must
+    // too, or the back-to-back-frame test would not exercise stale data.
+    static act_t line[DW_K - 1][DW_W][DW_C];
 #pragma HLS ARRAY_PARTITION variable=line complete dim=1
-    act_t hist[DW_C][DW_K][DW_K - 1];
+    static act_t hist[DW_C][DW_K][DW_K - 1];
 #pragma HLS ARRAY_PARTITION variable=hist complete dim=2
 #pragma HLS ARRAY_PARTITION variable=hist complete dim=3
     axi_word_t cur = 0;
@@ -48,7 +50,9 @@ WG_ROWS:
 #pragma HLS PIPELINE II=1
                 // line[.][x][c] and hist[c] are revisited only DW_C (hist) or
                 // (DW_W+1)*DW_C (line) iterations later, far beyond the pipeline
-                // depth, so there is no true inter-iteration dependence.
+                // depth, so there is no true inter-iteration dependence. (DW_C >= 16 is
+                // guaranteed by the DW_C % AXI_BYTES static_assert in mem_types.h; the
+                // pipeline is a few stages deep. Revisit if DW_C ever gets smaller.)
 #pragma HLS DEPENDENCE variable=line type=inter dependent=false
 #pragma HLS DEPENDENCE variable=hist type=inter dependent=false
                 const bool in_img = (y < DW_H) && (x < DW_W);
