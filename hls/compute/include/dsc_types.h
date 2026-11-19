@@ -65,8 +65,10 @@ static const int PW_C_OUT = 64;    // pointwise output channels
 static const int PW_H     = DW_HO_MAX;
 static const int PW_W     = DW_WO_MAX;
 
-// Pointwise MACs per cycle (unroll factor across input channels).
+// Pointwise MACs per cycle (unroll factor across input channels), and the number of
+// cycles per pointwise output that implies. PW_C_IN must be a multiple of PW_UNROLL.
 static const int PW_UNROLL = 8;
+static const int PW_CBLKS  = PW_C_IN / PW_UNROLL;
 
 // Output size for a 3x3 conv with padding 1; stride must be 1 or 2.
 // Written as a shift, not "/ stride", so HLS doesn't build a runtime divider.
