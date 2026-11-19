@@ -33,6 +33,9 @@ void pointwise_top(const act_t in[PW_C_IN][PW_H][PW_W],
                    act_t out[PW_C_OUT][PW_H][PW_W]) {
     // Standalone C-sim / csynth-estimate wrapper; see dsc_kernels.h.
 #pragma HLS ARRAY_PARTITION variable=wt cyclic factor=PW_UNROLL dim=2
+    // Input partitioned like the weights: PW_UNROLL channels readable per cycle, so
+    // gathering a pixel's channel vector takes PW_CBLKS cycles, not PW_C_IN.
+#pragma HLS ARRAY_PARTITION variable=in cyclic factor=PW_UNROLL dim=1
 PW_ROWS:
     for (int y = 0; y < h; y++) {
 #pragma HLS LOOP_TRIPCOUNT min=8 max=16
@@ -42,9 +45,13 @@ PW_ROWS:
             act_t vec[PW_C_IN];
 #pragma HLS ARRAY_PARTITION variable=vec cyclic factor=PW_UNROLL
         PW_GATHER:
-            for (int c = 0; c < PW_C_IN; c++) {
+            for (int cb = 0; cb < PW_CBLKS; cb++) {
 #pragma HLS PIPELINE II=1
-                vec[c] = in[c][y][x];
+            PW_GATHER_LANE:
+                for (int u = 0; u < PW_UNROLL; u++) {
+#pragma HLS UNROLL
+                    vec[cb * PW_UNROLL + u] = in[cb * PW_UNROLL + u][y][x];
+                }
             }
 
             acc_t acc = 0;
