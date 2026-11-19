@@ -1,4 +1,4 @@
-// dsc_kernels.h — baseline (no zero-skipping) depthwise and pointwise compute.
+// dsc_kernels.h — depthwise and pointwise compute, baseline and zero-skipping.
 //
 // Two layers of API:
 //   * Cores (dw_window_mac, pw_partial_sum): the actual MAC datapath. These are what
@@ -30,6 +30,35 @@ act_t dw_window_mac(const act_t win[DW_K][DW_K],
 acc_t pw_partial_sum(const act_t vec[PW_C_IN],
                      const wgt_t row[PW_C_IN],
                      int cblk);
+
+// ---- Zero-block skipping (pointwise) -------------------------------------------
+// See src/pointwise_skip.cpp and SKIP_FORMAT.md.
+
+// Per-output-channel mask: bit cb set = weight block cb has a nonzero weight.
+typedef uint8_t ap_blk_mask_t;
+static_assert(PW_CBLKS <= 8, "ap_blk_mask_t holds at most 8 blocks per output channel");
+static_assert(PW_C_OUT <= 256, "pw_sched_t.k is 8 bits");
+static_assert(PW_C_IN % PW_UNROLL == 0, "PW_C_IN must be a multiple of PW_UNROLL");
+
+// One schedule entry = one pipeline cycle of the skipping pointwise loop.
+struct pw_sched_t {
+    uint8_t k;       // output channel
+    uint8_t cb;      // weight block (input channels cb*PW_UNROLL ..)
+    bool    mac_en;  // false only for a bias-only entry (all blocks of k are zero)
+    bool    first;   // first entry of channel k: seed accumulator with bias[k]
+    bool    last;    // last entry of channel k: requantize and write out[k]
+};
+
+// Pointwise with zero-block skipping. skip_en = 0 runs every block (dense; the
+// benchmarking bypass). sched_len returns the schedule length = pipeline cycles per
+// pixel; the dense schedule is PW_C_OUT * PW_CBLKS.
+void pointwise_skip_top(const act_t in[PW_C_IN][PW_H][PW_W],
+                        const wgt_t wt[PW_C_OUT][PW_C_IN],
+                        const acc_t bias[PW_C_OUT],
+                        int h, int w,
+                        bool skip_en,
+                        act_t out[PW_C_OUT][PW_H][PW_W],
+                        int &sched_len);
 
 void depthwise_top(const act_t in[DW_C][DW_H][DW_W],
                    const wgt_t wt[DW_C][DW_K][DW_K],

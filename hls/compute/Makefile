@@ -7,7 +7,7 @@ CXX      ?= g++
 CXXFLAGS ?= -std=c++14 -O2 -Wall -Wextra -Wno-unknown-pragmas -Wno-unused-label
 INCLUDES  = -Iinclude -Igolden
 
-SRCS = src/requant.cpp src/depthwise.cpp src/pointwise.cpp \
+SRCS = src/requant.cpp src/depthwise.cpp src/pointwise.cpp src/pointwise_skip.cpp \
        golden/dsc_golden.cpp tb/tb_dsc.cpp
 BIN  = build/tb_dsc
 

@@ -146,6 +146,93 @@ static void run_pw(const char* name, int h, int w) {
     if (mism) g_failures++;
 }
 
+// ---- zero-block skipping (pointwise) -------------------------------------------
+// Block-structured pruning: each PW_UNROLL-wide weight block of each output channel is
+// zeroed with probability block_zero_pct. Also used with block_zero_pct = 0 plus the
+// GenParams zero_wgt_pct for unstructured (per-weight) zeros.
+static void gen_pw_blocks(const GenParams& p, int block_zero_pct) {
+    gen_pw(p);
+    for (int k = 0; k < PW_C_OUT; k++)
+        for (int cb = 0; cb < PW_CBLKS; cb++)
+            if ((int)(rng() % 100) < block_zero_pct)
+                for (int u = 0; u < PW_UNROLL; u++)
+                    g_pw_wt[k][cb * PW_UNROLL + u] = 0;
+}
+
+// Expected schedule length, computed independently of the kernel: per output channel,
+// the number of blocks with any nonzero weight, but at least 1 (bias-only entry).
+static int expected_sched_len() {
+    int total = 0;
+    for (int k = 0; k < PW_C_OUT; k++) {
+        int nz_blocks = 0;
+        for (int cb = 0; cb < PW_CBLKS; cb++) {
+            bool nz = false;
+            for (int u = 0; u < PW_UNROLL; u++)
+                if (g_pw_wt[k][cb * PW_UNROLL + u] != 0) nz = true;
+            if (nz) nz_blocks++;
+        }
+        total += nz_blocks > 0 ? nz_blocks : 1;
+    }
+    return total;
+}
+
+// Runs pointwise_skip_top with skipping on and off; both must match the golden model
+// bit-exactly, and the schedule lengths must match the independent expectation.
+static void run_pw_skip(const char* name, int h, int w) {
+    for (int c = 0; c < PW_C_IN; c++)
+        for (int y = 0; y < PW_H; y++)
+            for (int x = 0; x < PW_W; x++)
+                k_pw_in[c][y][x] = (act_t)g_pw_in[c][y][x];
+    int zero_wgts = 0;
+    for (int k = 0; k < PW_C_OUT; k++) {
+        for (int c = 0; c < PW_C_IN; c++) {
+            k_pw_wt[k][c] = (wgt_t)g_pw_wt[k][c];
+            if (g_pw_wt[k][c] == 0) zero_wgts++;
+        }
+        k_pw_b[k] = (acc_t)g_pw_b[k];
+    }
+    golden_pointwise(g_pw_in, g_pw_wt, g_pw_b, h, w, g_pw_out);
+
+    const int dense_len = PW_C_OUT * PW_CBLKS;
+    const int exp_len = expected_sched_len();
+    int mism = 0, interior = 0, total = 0;
+    int len_skip = -1, len_dense = -1;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const bool skip_en = (pass == 0);
+        int len = -1;
+        pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, h, w, skip_en, k_pw_out, len);
+        (skip_en ? len_skip : len_dense) = len;
+        for (int k = 0; k < PW_C_OUT; k++)
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++) {
+                    int g = g_pw_out[k][y][x], kk = (int)k_pw_out[k][y][x];
+                    if (skip_en) {
+                        total++;
+                        if (g > 0 && g < ACT_RELU6_MAX) interior++;
+                    }
+                    if (g != kk) {
+                        if (mism < 5)
+                            printf("    mismatch (skip_en=%d) k=%d y=%d x=%d golden=%d kernel=%d\n",
+                                   (int)skip_en, k, y, x, g, kk);
+                        mism++;
+                    }
+                }
+    }
+
+    bool len_ok = (len_skip == exp_len) && (len_dense == dense_len);
+    if (!len_ok)
+        printf("    schedule length: skip=%d (expected %d), bypass=%d (expected %d)\n",
+               len_skip, exp_len, len_dense, dense_len);
+    bool ok = (mism == 0) && len_ok;
+    printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
+           ok ? "PASS" : "FAIL", name, total, interior, mism);
+    printf("       weights zero %5.1f%% | cycles/pixel %3d of %3d | MAC cycles skipped %5.1f%%\n",
+           100.0 * zero_wgts / (PW_C_OUT * PW_C_IN), len_skip, dense_len,
+           100.0 * (dense_len - len_skip) / dense_len);
+    if (!ok) g_failures++;
+}
+
 // Requant checked directly over every accumulator value near the interesting
 // boundaries (rounding ties, 0, ReLU6 max) plus a wide sweep.
 static void test_requant() {
@@ -206,6 +293,18 @@ int main() {
     gen_pw(pw_sparse); run_pw("pointwise 50% zero weights", PW_H, PW_W);
     gen_pw(pw_wide);   run_pw("pointwise full weight range", PW_H, PW_W);
     gen_pw(pw_sat);    run_pw("pointwise saturate high", PW_H, PW_W);
+
+    // Zero-block skipping: block-structured sparsity sweep, plus cases that stress
+    // the schedule (all zero, unstructured zeros that rarely fill a whole block).
+    printf("\n-- pointwise zero-block skipping (skip on and bypass both checked) --\n");
+    gen_pw_blocks(pw_rand, 0);   run_pw_skip("skip: dense (0% blocks pruned)", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 30);  run_pw_skip("skip: 30% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: 50% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 70);  run_pw_skip("skip: 70% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 90);  run_pw_skip("skip: 90% blocks pruned", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 100); run_pw_skip("skip: all weights zero", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: 50% blocks pruned, 8x8", 8, 8);
+    gen_pw_blocks(pw_sparse, 0); run_pw_skip("skip: 50% unstructured zeros", PW_H, PW_W);
 
     if (g_failures) {
         printf("\nC-SIM FAILED: %d test(s) failed\n", g_failures);
