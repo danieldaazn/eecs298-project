@@ -221,7 +221,11 @@ static int expected_sched_len() {
 // bit-exactly, and the schedule lengths must match the independent expectation.
 // The output buffer is refilled with SENTINEL before each pass, so the bypass pass
 // can't pass on outputs left over from the skip-on pass.
-static void run_pw_skip(const char* name, int kh, int kw) {
+// Which skip kernel run_pw_skip drives. Called directly (not through a function
+// pointer): Vitis co-sim only instruments direct calls to the top function.
+enum SkipKernel { SKIP_BASE, SKIP_PIPE };
+
+static void run_pw_skip(const char* name, int kh, int kw, SkipKernel which = SKIP_BASE) {
     const int h = kh < PW_H ? kh : PW_H, w = kw < PW_W ? kw : PW_W;
     load_pw_kernel_inputs();
     int zero_wgts = 0;
@@ -239,7 +243,10 @@ static void run_pw_skip(const char* name, int kh, int kw) {
         const bool skip_en = (pass == 0);
         int len = -1;
         fill_pw_out();
-        pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, kh, kw, skip_en, k_pw_out, len);
+        if (which == SKIP_PIPE)
+            pointwise_skip_pipe_top(k_pw_in, k_pw_wt, k_pw_b, kh, kw, skip_en, k_pw_out, len);
+        else
+            pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, kh, kw, skip_en, k_pw_out, len);
         (skip_en ? len_skip : len_dense) = len;
         int pass_interior = 0, pass_total = 0;
         compare_out<PW_C_OUT, PW_H, PW_W>(g_pw_out, k_pw_out, h, w,
@@ -344,6 +351,26 @@ int main() {
     gen_pw_blocks(pw_sparse, 0); run_pw_skip("skip: 50% unstructured zeros", PW_H, PW_W);
     gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: h/w too big (clamped)", PW_H + 3, PW_W + 7);
     gen_pw_blocks(pw_bigb, 50);  run_pw_skip("skip: bias at limit", PW_H, PW_W);
+
+    // Prototype with next-pixel prefetch: every skip case again, plus shapes that
+    // stress its pixel-advance logic (1x1, single row/column, odd sizes).
+    printf("\n-- pointwise_skip_pipe_top (prototype: overlapped input load) --\n");
+    const SkipKernel pipe = SKIP_PIPE;
+    gen_pw_blocks(pw_rand, 0);   run_pw_skip("pipe: dense (0% blocks pruned)", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 30);  run_pw_skip("pipe: 30% blocks pruned", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 50% blocks pruned", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 70);  run_pw_skip("pipe: 70% blocks pruned", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 90);  run_pw_skip("pipe: 90% blocks pruned", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 100); run_pw_skip("pipe: all weights zero", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 50% blocks pruned, 8x8", 8, 8, pipe);
+    gen_pw_blocks(pw_sparse, 0); run_pw_skip("pipe: 50% unstructured zeros", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: h/w too big (clamped)", PW_H + 3, PW_W + 7, pipe);
+    gen_pw_blocks(pw_bigb, 50);  run_pw_skip("pipe: bias at limit", PW_H, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 1x1", 1, 1, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 1x16 (one row)", 1, PW_W, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 16x1 (one column)", PW_H, 1, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: 3x5", 3, 5, pipe);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("pipe: h=w=0 (writes nothing)", 0, 0, pipe);
 
     if (g_failures) {
         printf("\nC-SIM FAILED: %d test(s) failed\n", g_failures);

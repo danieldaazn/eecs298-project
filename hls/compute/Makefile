@@ -14,7 +14,7 @@ INCLUDES  = -Iinclude -Igolden
 PYTHON   ?= python3
 
 KERNELS = src/requant.cpp src/depthwise.cpp src/pointwise.cpp src/pointwise_skip.cpp \
-          golden/dsc_golden.cpp
+          src/pointwise_skip_pipe.cpp golden/dsc_golden.cpp
 HDRS    = include/*.h golden/*.h
 BIN     = build/tb_dsc
 VBIN    = build/tb_vectors
