@@ -157,10 +157,12 @@ static void dsc_dataflow(const axi_word_t *in, axi_word_t *out,
     hls::stream<pw_vec_t>   s_dw("s_dw");
     hls::stream<axi_word_t> s_out("s_out");
     // Depths: see ARCHITECTURE.md ("FIFO depths"). pw_stage is the bottleneck, so
-    // these only need to keep it from starving, not to absorb rate variation.
+    // these only need to keep it from starving, not to absorb rate variation. s_dw is
+    // 4 pixels so pointwise keeps working through stride 2's window-less input rows
+    // (hls/memory/tools/dataflow_model.py: -5 to -13 % cycles at stride 2, 30-50 %).
 #pragma HLS STREAM variable=s_in  depth=32
 #pragma HLS STREAM variable=s_win depth=4
-#pragma HLS STREAM variable=s_dw  depth=8
+#pragma HLS STREAM variable=s_dw  depth=16
 #pragma HLS STREAM variable=s_out depth=8
 
     read_input(in, s_in);
