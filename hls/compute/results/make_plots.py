@@ -182,8 +182,52 @@ def fig_latency(rows):
     return path
 
 
+def fig_energy(rows):
+    """Estimated PL energy per block = Vivado vectorless power x measured co-sim latency.
+    For the fused block with both proposed changes (the version that meets 200 MHz)."""
+    pw = {}
+    with open(os.path.join(HERE, "power_results.csv")) as f:
+        for r in csv.DictReader(line for line in f if not line.startswith("#")):
+            pw[(r["design"], r["variant"])] = (float(r["dynamic_w"]), float(r["device_static_w"]))
+    dyn_w, stat_w = pw[("dsc_top", "bram_lat2+overlap")]
+    data = sorted((r for r in rows if r["kernel"] == "dsc_top+bram_lat2+overlap" and r["stride"] == 1
+                   and not r["case"].startswith("50% unstructured")), key=lambda r: r["block_prune_pct"])
+    labels = ["dense" if r["block_prune_pct"] == 0 else
+              ("all zero" if r["block_prune_pct"] == 100 else f"{r['block_prune_pct']}%") for r in data]
+    t_us = [r["cycles_skip_on"] / CLOCK_MHZ for r in data]           # cycles / MHz = microseconds
+    e_dyn = [dyn_w * t for t in t_us]                                 # W x us = uJ
+    e_stat = [stat_w * t for t in t_us]
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.2), dpi=200)
+    fig.patch.set_facecolor(SURFACE)
+    style(ax)
+    ax.grid(False, axis="x")
+    x = range(len(data))
+    ax.bar(x, e_dyn, 0.56, color="#2a78d6", label=f"Accelerator dynamic ({dyn_w * 1000:.0f} mW)", zorder=2)
+    ax.bar(x, e_stat, 0.56, bottom=e_dyn, color="#c3c2b7", label=f"PL device static ({stat_w * 1000:.0f} mW, always on)",
+           zorder=2, edgecolor=SURFACE, linewidth=1.5)
+    for i, (d, st) in enumerate(zip(e_dyn, e_stat)):
+        ax.text(i, d + st + 2, f"{d + st:.0f} µJ", ha="center", va="bottom", fontsize=8.5, color=TEXT)
+        ax.text(i, d / 2, f"{d:.0f}", ha="center", va="center", fontsize=8, color=SURFACE)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("Pointwise weight blocks pruned (skipping on)", color=TEXT, fontsize=10)
+    ax.set_ylabel("Estimated PL energy per block (µJ)", color=TEXT, fontsize=10)
+    ax.set_ylim(0, (e_dyn[0] + e_stat[0]) * 1.22)
+    ax.set_title("Estimated energy per depthwise-separable block (16×16, 32→64, 200 MHz)",
+                 color=TEXT, fontsize=10.5, loc="left")
+    ax.legend(loc="upper right", fontsize=8, frameon=False, labelcolor=TEXT)
+    fig.text(0.01, 0.005, "ESTIMATE: Vivado vectorless power (default toggle rates) × measured co-sim latency.\n"
+             "PL only; excludes the ARM PS and DDR. Board measurement pending.", fontsize=7.5, color=TEXT2)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    path = os.path.join(HERE, "fig_energy.png")
+    fig.savefig(path, facecolor=SURFACE)
+    plt.close(fig)
+    return path
+
+
 if __name__ == "__main__":
     rows = load()
-    for p in (fig_speedup(rows), fig_efficiency(rows), fig_latency(rows)):
+    for p in (fig_speedup(rows), fig_efficiency(rows), fig_latency(rows), fig_energy(rows)):
         if p:
             print("wrote", p)

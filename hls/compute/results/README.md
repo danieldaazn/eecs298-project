@@ -110,3 +110,40 @@ Speedup vs. the same build's bypass (rows `dsc_top+bram_lat2+overlap` in `cosim_
 
 **This is the strongest fused-block result so far.** Stride 2 is unchanged, as
 expected: there, depthwise and the line buffer are the bottleneck, not pointwise.
+
+## Estimated power and energy per inference
+
+**These are estimates, not measurements.** Vivado's post-route `report_power` is
+*vectorless*: it assumes default switching activity, and rates its own confidence
+"Medium". It covers the PL only, with no ARM processor or DDR. Board measurement
+(INA260, see PR #3) replaces this when available. Data: `power_results.csv`.
+
+| Design | Dynamic | PL device static | Total PL |
+|---|---|---|---|
+| `dsc_top` as in #2 | 96 mW | 289 mW | 385 mW |
+| `dsc_top` + both proposed changes | 100 mW | 289 mW | 389 mW |
+| `pointwise_skip_pipe_top` (standalone) | 19 mW | 288 mW | 307 mW |
+
+- **Dynamic power comes from:** block RAM 30 mW, clocks 27 mW, logic 24 mW, signals
+  14 mW, DSPs 4 mW.
+- **Device static (~289 mW)** is drawn by the PL whether or not the accelerator runs.
+
+**Energy per block** = power × measured co-sim latency, for the fused block with both
+changes at 200 MHz, stride 1, skipping on (`fig_energy.png`):
+
+| Blocks pruned | Latency | Dynamic energy | Total PL energy |
+|---|---|---|---|
+| dense | 336 µs | 34 µJ | 131 µJ |
+| 30% | 221 µs | 22 µJ | 86 µJ |
+| 50% | 190 µs | 19 µJ | 74 µJ |
+| 90% | 94 µs | 9 µJ | 37 µJ |
+| all weights zero | 90 µs | 9 µJ | 35 µJ |
+
+**Why energy falls with sparsity:** the run is shorter at roughly the same power.
+
+**Both estimates are simplifications:**
+- Vectorless power doesn't vary with sparsity. Real dynamic power while skipping should
+  be similar or a bit lower, so the pruned-case energy here is, if anything, an
+  overestimate.
+- Attributing all the device static to the inference assumes the PL would otherwise be
+  off; if it stays powered anyway, only the dynamic column counts.
