@@ -45,6 +45,7 @@ From `timing_results.csv`:
 | `pointwise_skip_pipe_top` (prototype) | 3.64 ns | 3.41 ns | **4.19 ns** | ~238 MHz | met | 663 / 576 / 10 / 0 |
 | `dsc_top` (PR #2) | 3.65 ns | 5.09 ns | **5.54 ns** | ~181 MHz | **not met** | 3,662 / 5,162 / 17 / 30 |
 | `dsc_top` + BRAM output register (fix) | 3.65 ns | 3.43 ns | **4.24 ns** | **~236 MHz** | **met** | 3,639 / 5,212 / 17 / 30 |
+| `dsc_top` + fix + overlapped load | 3.65 ns | 3.43 ns | **4.28 ns** | **~234 MHz** | **met** | 3,704 / 5,330 / 19 / 30 |
 
 **HLS estimates were wrong in both directions:**
 - **Timing was optimistic.** HLS predicted ~274 MHz for both designs.
@@ -84,3 +85,28 @@ Tested on a scratch copy of PR #2 (`ecf8a64` + this line):
 - **Correctness:** co-sim passes, bit-exact on all cases.
 
 It's Hank's file, so this goes to him as a suggested change for #2.
+
+## Overlapped load in the fused block (experiment on #2)
+
+The prototype's structure ported into `pw_stage` in `dsc_top`, together with the BRAM fix
+above. Tested on a scratch copy of #2 (`ecf8a64` + both changes; kept on a local-only
+branch, not pushed to Hank's branch).
+
+- **Correctness:** co-sim passes, bit-exact on all 43 calls, 0 dependence warnings.
+- **Throughput:** `PW_RUN` at II=1.
+- **Timing:** post-route 4.28 ns (~234 MHz), timing met.
+- **Resources:** essentially unchanged.
+
+Speedup vs. the same build's bypass (rows `dsc_top+bram_lat2+overlap` in `cosim_results.csv`):
+
+| Blocks pruned | `dsc_top` as in #2 | + fix + overlapped load |
+|---|---|---|
+| dense (cycles, stride 1) | 71,282 | **67,208** (−5.7%) |
+| 30% | 1.48× | **1.52×** |
+| 50% | 1.69× | **1.77×** |
+| 90% | 3.11× | **3.57×** |
+| all weights zero | 3.22× | **3.72×** |
+| stride 2, 90% | 1.92× | 1.92× (line-buffer cap) |
+
+**This is the strongest fused-block result so far.** Stride 2 is unchanged, as
+expected: there, depthwise and the line buffer are the bottleneck, not pointwise.

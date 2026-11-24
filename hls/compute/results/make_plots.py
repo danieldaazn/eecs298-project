@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make_plots.py — figures for the report from measured co-sim data (cosim_results.csv).
 
-    python3 make_plots.py        # writes fig_speedup.png, fig_latency.png next to this file
+    python3 make_plots.py        # writes fig_speedup.png, fig_efficiency.png, fig_latency.png
 
 Every number plotted is a measured C/RTL co-simulation cycle count; nothing is estimated.
 Speedup = cycles with skipping off (bypass) / cycles with skipping on, same hardware.
@@ -26,6 +26,7 @@ SERIES = [
     ("dsc_top",                 1, "Fused DW→PW block, stride 1",          "#eb6834", "s"),
     ("dsc_top",                 2, "Fused DW→PW block, stride 2",          "#1baf7a", "^"),
     ("pointwise_skip_pipe_top", 1, "Pointwise, overlapped load (proto.)",  "#6250d6", "D"),
+    ("dsc_top+bram_lat2+overlap", 1, "Fused block + overlapped load (exp.)", "#e87ba4", "P"),
 ]
 
 
@@ -53,47 +54,87 @@ def style(ax):
     ax.set_axisbelow(True)
 
 
+def series_points(rows, kernel, stride):
+    """(skipped %, speedup) for one series: dense + block-pruned cases (not unstructured)."""
+    return sorted((r["skipped_pct"], r["speedup"]) for r in rows
+                  if r["kernel"] == kernel and r["stride"] == stride
+                  and (r["block_prune_pct"] > 0 or r["case"] == "dense"))
+
+
+def ideal(x_pct):
+    return 1.0 / (1.0 - x_pct / 100.0)
+
+
 def fig_speedup(rows):
-    fig, ax = plt.subplots(figsize=(7.0, 4.6), dpi=200)
+    """Two panels: standalone pointwise kernels | fused DW->PW block. Measured points
+    (markers only: cases are sparse, and straight segments between distant points would
+    cut above the convex ideal curve and misread as better-than-ideal)."""
+    panels = [
+        ("Standalone pointwise kernel (stride 1)", ["pointwise_skip_top", "pointwise_skip_pipe_top"]),
+        ("Fused DW→PW block (dsc_top)", ["dsc_top", "dsc_top+bram_lat2+overlap"]),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.4), dpi=200, sharey=True)
+    fig.patch.set_facecolor(SURFACE)
+    xs = [i * 0.5 for i in range(0, 151)]
+    for ax, (title, kernels) in zip(axes, panels):
+        style(ax)
+        ax.plot(xs, [ideal(x) for x in xs], color=TEXT2, linewidth=1.2, linestyle=(0, (4, 3)),
+                zorder=1, label="Ideal: 1 / (1 − skipped)")
+        for kernel, stride, label, color, marker in SERIES:
+            if kernel not in kernels:
+                continue
+            pts = series_points(rows, kernel, stride)
+            if not pts:
+                continue
+            x, y = zip(*pts)
+            ax.plot(x, y, linestyle="none", marker=marker, markersize=7, color=color,
+                    markeredgecolor=SURFACE, markeredgewidth=1.2, label=label, zorder=3)
+            ax.annotate(f"{y[-1]:.2f}×", (x[-1], y[-1]), xytext=(7, 0), textcoords="offset points",
+                        va="center", fontsize=8.5, color=TEXT)
+        ax.set_xlim(-2, 82)
+        ax.set_ylim(0.8, 4.2)
+        ax.set_xlabel("Pointwise MAC cycles skipped (%)", color=TEXT, fontsize=10)
+        ax.set_title(title, color=TEXT, fontsize=10.5, loc="left")
+        ax.legend(loc="upper left", fontsize=8, frameon=False, labelcolor=TEXT)
+    axes[0].set_ylabel("Speedup vs. skipping off (×)", color=TEXT, fontsize=10)
+    fig.suptitle("Zero-block skipping: measured speedup (C/RTL co-sim, K26)", color=TEXT,
+                 fontsize=11.5, x=0.01, ha="left")
+    fig.text(0.01, 0.005, "Same hardware with skip_en on vs. off; each point is one test case. "
+             "Stride 2 (fused block) is capped near 2× by the line buffer: see fig_efficiency.png.",
+             fontsize=7.5, color=TEXT2)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.97))
+    path = os.path.join(HERE, "fig_speedup.png")
+    fig.savefig(path, facecolor=SURFACE)
+    plt.close(fig)
+    return path
+
+
+def fig_efficiency(rows):
+    """Measured speedup as a percentage of the ideal for the same skip rate."""
+    fig, ax = plt.subplots(figsize=(7.0, 4.4), dpi=200)
     fig.patch.set_facecolor(SURFACE)
     style(ax)
-
-    # Ideal: speedup = 1 / (1 - skipped), if skipping removed cycles with no overhead.
-    xs = [i * 0.5 for i in range(0, 151)]
-    ax.plot(xs, [1.0 / (1.0 - x / 100.0) for x in xs], color=TEXT2, linewidth=1.2,
-            linestyle=(0, (4, 3)), zorder=1, label="Ideal: 1 / (1 − skipped)")
-
     for kernel, stride, label, color, marker in SERIES:
-        pts = sorted((r["skipped_pct"], r["speedup"]) for r in rows
-                     if r["kernel"] == kernel and r["stride"] == stride and r["block_prune_pct"] > 0
-                     or (r["kernel"] == kernel and r["stride"] == stride and r["case"] == "dense"))
+        pts = [(x, 100.0 * y / ideal(x)) for x, y in series_points(rows, kernel, stride) if x > 0]
         if not pts:
             continue
         x, y = zip(*pts)
         ax.plot(x, y, color=color, linewidth=2, marker=marker, markersize=6,
-                markeredgecolor=SURFACE, markeredgewidth=1.5, label=label, zorder=3)
-        ax.annotate(f"{y[-1]:.2f}×", (x[-1], y[-1]), xytext=(6, 0), textcoords="offset points",
+                markeredgecolor=SURFACE, markeredgewidth=1.2, label=label, zorder=3)
+        ax.annotate(f"{y[-1]:.0f}%", (x[-1], y[-1]), xytext=(7, 0), textcoords="offset points",
                     va="center", fontsize=8.5, color=TEXT)
-
-    # Unstructured pruning: lots of zero weights, nothing skippable.
-    un = [r for r in rows if r["kernel"] == "pointwise_skip_top" and r["case"].startswith("50% unstructured")]
-    if un:
-        ax.annotate("50% of weights zeroed at random\n(not block-aligned): ~1.0×",
-                    (un[0]["skipped_pct"], un[0]["speedup"]), xytext=(9, 0.86),
-                    textcoords="data", fontsize=8, color=TEXT2,
-                    arrowprops=dict(arrowstyle="-", color=TEXT2, linewidth=0.8))
-
-    ax.set_xlim(-2, 80)
-    ax.set_ylim(0.8, 4.2)
+    ax.axhline(100, color=TEXT2, linewidth=1.2, linestyle=(0, (4, 3)), zorder=1)
+    ax.text(21, 101.5, "ideal", color=TEXT2, fontsize=8.5)
+    ax.set_xlim(20, 84)
+    ax.set_ylim(40, 108)
     ax.set_xlabel("Pointwise MAC cycles skipped (%)", color=TEXT, fontsize=10)
-    ax.set_ylabel("Layer speedup vs. skipping off (×)", color=TEXT, fontsize=10)
-    ax.set_title("Zero-block skipping: measured speedup (C/RTL co-sim, K26)",
-                 color=TEXT, fontsize=11, loc="left")
-    leg = ax.legend(loc="upper left", fontsize=8.5, frameon=False, labelcolor=TEXT)
-    fig.text(0.01, 0.005, "Same hardware with skip_en on vs. off. Stride 2 is capped by the line buffer "
-             "(1 channel/cycle over every input pixel).", fontsize=7.5, color=TEXT2)
+    ax.set_ylabel("Speedup achieved, % of ideal", color=TEXT, fontsize=10)
+    ax.set_title("How much of the skipped work turns into speedup", color=TEXT, fontsize=11, loc="left")
+    ax.legend(loc="lower left", fontsize=8, frameon=False, labelcolor=TEXT)
+    fig.text(0.01, 0.005, "Ideal = 1 / (1 − skipped). Overlapped load removes the per-pixel "
+             "load/restart overhead; stride 2 is limited by the line buffer.", fontsize=7.5, color=TEXT2)
     fig.tight_layout(rect=(0, 0.03, 1, 1))
-    path = os.path.join(HERE, "fig_speedup.png")
+    path = os.path.join(HERE, "fig_efficiency.png")
     fig.savefig(path, facecolor=SURFACE)
     plt.close(fig)
     return path
@@ -143,6 +184,6 @@ def fig_latency(rows):
 
 if __name__ == "__main__":
     rows = load()
-    for p in (fig_speedup(rows), fig_latency(rows)):
+    for p in (fig_speedup(rows), fig_efficiency(rows), fig_latency(rows)):
         if p:
             print("wrote", p)

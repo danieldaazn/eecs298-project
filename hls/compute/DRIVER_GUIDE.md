@@ -100,6 +100,8 @@ This is the actuator the energy-adaptive governor in PR #3 would use, along with
 |---|---|---|
 | `dsc_top` as in #2, dense | 71,282 | 0.36 ms |
 | `dsc_top` as in #2, 90% blocks pruned | 22,898 | 0.11 ms |
+| with the timing fix + overlapped load (proposed for #2), dense | 67,208 | 0.34 ms |
+| with the timing fix + overlapped load (proposed for #2), 90% pruned | 18,824 | 0.09 ms |
 
 Per call, latency ≈ (pixels × per-pixel pointwise cost) + a fixed setup of a few hundred
 cycles (loading weights, building the skip schedule). Stride 2 is capped near 2× by the
