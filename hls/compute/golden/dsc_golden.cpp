@@ -20,8 +20,10 @@ void golden_depthwise(const int in[DW_C][DW_H][DW_W],
                       const int bias[DW_C],
                       int stride,
                       int out[DW_C][DW_HO_MAX][DW_WO_MAX]) {
-    int ho = dw_out_dim(DW_H, stride);
-    int wo = dw_out_dim(DW_W, stride);
+    // Output size computed directly, not with the kernel-side dw_out_dim(), so a
+    // wrong size there can't be mirrored here.
+    int ho = (DW_H + 2 * DW_PAD - DW_K) / stride + 1;
+    int wo = (DW_W + 2 * DW_PAD - DW_K) / stride + 1;
     for (int c = 0; c < DW_C; c++) {
         for (int oy = 0; oy < ho; oy++) {
             for (int ox = 0; ox < wo; ox++) {

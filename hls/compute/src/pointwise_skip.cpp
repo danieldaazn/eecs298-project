@@ -112,10 +112,11 @@ void pointwise_skip_top(const act_t in[PW_C_IN][PW_H][PW_W],
 
     // ---- 3. run the schedule for every pixel -------------------------------------
 PW_SK_ROWS:
-    for (int y = 0; y < h; y++) {
+    // h/w come from the driver: never index past the compile-time maximum.
+    for (int y = 0; y < h && y < PW_H; y++) {
 #pragma HLS LOOP_TRIPCOUNT min=8 max=16
     PW_SK_COLS:
-        for (int x = 0; x < w; x++) {
+        for (int x = 0; x < w && x < PW_W; x++) {
 #pragma HLS LOOP_TRIPCOUNT min=8 max=16
             act_t vec[PW_C_IN];
 #pragma HLS ARRAY_PARTITION variable=vec cyclic factor=PW_UNROLL

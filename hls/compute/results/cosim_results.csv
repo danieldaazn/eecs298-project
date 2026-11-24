@@ -1,0 +1,49 @@
+# Measured C/RTL co-simulation cycle counts, Vitis HLS 2024.2, part xck26-sfvc784-2LV-c, 200 MHz target.
+# kernel: pointwise_skip_top = standalone pointwise + skip (hls/compute), dsc_top = fused DW->PW streaming block (hls/top, PR #2 @ ecf8a64)
+# Layer: 32 -> 64 channels; stride 1 = 16x16 output pixels, stride 2 = 8x8.
+# sched_len = pointwise cycles per pixel (256 dense). cycles_* = whole-call latency from the co-sim transaction report.
+kernel,stride,case,block_prune_pct,sched_len,cycles_skip_on,cycles_bypass
+pointwise_skip_top,1,dense,0,256,69798,69798
+pointwise_skip_top,1,30% blocks pruned,30,178,49830,69798
+pointwise_skip_top,1,50% blocks pruned,50,128,37030,69798
+pointwise_skip_top,1,70% blocks pruned,70,101,30118,69798
+pointwise_skip_top,1,90% blocks pruned,90,70,22182,69798
+pointwise_skip_top,1,all weights zero,100,64,20646,69798
+pointwise_skip_top,1,50% unstructured zeros,0,255,69542,69798
+dsc_top,1,dense,0,256,71290,71282
+dsc_top,1,30% blocks pruned,30,166,48238,71282
+dsc_top,1,50% blocks pruned,50,142,42099,71282
+dsc_top,1,90% blocks pruned,90,67,22898,71282
+dsc_top,1,all weights zero,100,64,22128,71282
+dsc_top,1,50% unstructured zeros,0,256,71282,71282
+dsc_top,2,dense,0,256,19627,19622
+dsc_top,2,30% blocks pruned,30,186,16122,19622
+dsc_top,2,50% blocks pruned,50,141,13868,19622
+dsc_top,2,90% blocks pruned,90,68,10221,19622
+dsc_top,2,all weights zero,100,64,10018,19622
+dsc_top,2,50% unstructured zeros,0,255,19566,19622
+dsc_top+bram_lat2,1,dense,0,256,71542,71534
+dsc_top+bram_lat2,1,30% blocks pruned,30,166,48497,71534
+dsc_top+bram_lat2,1,50% blocks pruned,50,142,42351,71534
+dsc_top+bram_lat2,1,90% blocks pruned,90,67,23150,71534
+dsc_top+bram_lat2,1,all weights zero,100,64,22387,71534
+dsc_top+bram_lat2,1,50% unstructured zeros,0,256,71534,71534
+pointwise_skip_pipe_top,1,dense,0,256,65941,65941
+pointwise_skip_pipe_top,1,30% blocks pruned,30,177,45717,65941
+pointwise_skip_pipe_top,1,50% blocks pruned,50,131,33941,65941
+pointwise_skip_pipe_top,1,70% blocks pruned,70,93,24213,65941
+pointwise_skip_pipe_top,1,90% blocks pruned,90,68,17813,65941
+pointwise_skip_pipe_top,1,all weights zero,100,64,16789,65941
+pointwise_skip_pipe_top,1,50% unstructured zeros,0,255,65685,65941
+dsc_top+bram_lat2+overlap,1,dense,0,256,67216,67208
+dsc_top+bram_lat2+overlap,1,30% blocks pruned,30,166,44171,67208
+dsc_top+bram_lat2+overlap,1,50% blocks pruned,50,142,38025,67208
+dsc_top+bram_lat2+overlap,1,90% blocks pruned,90,67,18824,67208
+dsc_top+bram_lat2+overlap,1,all weights zero,100,64,18061,67208
+dsc_top+bram_lat2+overlap,1,50% unstructured zeros,0,256,67208,67208
+dsc_top+bram_lat2+overlap,2,dense,0,256,18885,18880
+dsc_top+bram_lat2+overlap,2,30% blocks pruned,30,186,15380,18880
+dsc_top+bram_lat2+overlap,2,50% blocks pruned,50,141,13126,18880
+dsc_top+bram_lat2+overlap,2,90% blocks pruned,90,68,9843,18880
+dsc_top+bram_lat2+overlap,2,all weights zero,100,64,9801,18880
+dsc_top+bram_lat2+overlap,2,50% unstructured zeros,0,255,18831,18880

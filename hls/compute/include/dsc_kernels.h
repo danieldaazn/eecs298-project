@@ -78,6 +78,17 @@ void pointwise_skip_top(const act_t in[PW_C_IN][PW_H][PW_W],
                         act_t out[PW_C_OUT][PW_H][PW_W],
                         int &sched_len);
 
+// PROTOTYPE (src/pointwise_skip_pipe.cpp): same interface and results as
+// pointwise_skip_top, but loads the next pixel's input while the current pixel
+// computes, so each pixel costs sched_len cycles with no per-pixel load/restart gap.
+void pointwise_skip_pipe_top(const act_t in[PW_C_IN][PW_H][PW_W],
+                             const wgt_t wt[PW_C_OUT][PW_C_IN],
+                             const acc_t bias[PW_C_OUT],
+                             int h, int w,
+                             bool skip_en,
+                             act_t out[PW_C_OUT][PW_H][PW_W],
+                             int &sched_len);
+
 void depthwise_top(const act_t in[DW_C][DW_H][DW_W],
                    const wgt_t wt[DW_C][DW_K][DW_K],
                    const acc_t bias[DW_C],
