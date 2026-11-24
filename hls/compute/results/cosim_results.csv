@@ -28,3 +28,10 @@ dsc_top+bram_lat2,1,50% blocks pruned,50,142,42351,71534
 dsc_top+bram_lat2,1,90% blocks pruned,90,67,23150,71534
 dsc_top+bram_lat2,1,all weights zero,100,64,22387,71534
 dsc_top+bram_lat2,1,50% unstructured zeros,0,256,71534,71534
+pointwise_skip_pipe_top,1,dense,0,256,65941,65941
+pointwise_skip_pipe_top,1,30% blocks pruned,30,177,45717,65941
+pointwise_skip_pipe_top,1,50% blocks pruned,50,131,33941,65941
+pointwise_skip_pipe_top,1,70% blocks pruned,70,93,24213,65941
+pointwise_skip_pipe_top,1,90% blocks pruned,90,68,17813,65941
+pointwise_skip_pipe_top,1,all weights zero,100,64,16789,65941
+pointwise_skip_pipe_top,1,50% unstructured zeros,0,255,65685,65941

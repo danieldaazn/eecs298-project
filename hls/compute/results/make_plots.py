@@ -61,8 +61,7 @@ def fig_speedup(rows):
     # Ideal: speedup = 1 / (1 - skipped), if skipping removed cycles with no overhead.
     xs = [i * 0.5 for i in range(0, 151)]
     ax.plot(xs, [1.0 / (1.0 - x / 100.0) for x in xs], color=TEXT2, linewidth=1.2,
-            linestyle=(0, (4, 3)), zorder=1)
-    ax.text(73.5, 3.9, "ideal: 1 / (1 − skipped)", color=TEXT2, fontsize=8.5, ha="right")
+            linestyle=(0, (4, 3)), zorder=1, label="Ideal: 1 / (1 − skipped)")
 
     for kernel, stride, label, color, marker in SERIES:
         pts = sorted((r["skipped_pct"], r["speedup"]) for r in rows

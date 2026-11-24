@@ -9,21 +9,27 @@ place & route. Raw data: `cosim_results.csv`, `timing_results.csv`. Figures:
 
 Same hardware, `skip_en` on vs off (bypass). From `cosim_results.csv`:
 
-| Blocks pruned | MAC cycles skipped | `pointwise_skip_top` (s1) | `dsc_top` stride 1 | `dsc_top` stride 2 |
-|---|---|---|---|---|
-| 30% | ~28–31% | 1.40× | 1.48× | 1.22× |
-| 50% | ~45–50% | 1.88× | 1.69× | 1.41× |
-| 90% | ~73% | 3.15× | 3.11× | 1.92× |
-| all zero | 75% (cap) | 3.38× | 3.22× | 1.96× |
-| 50% unstructured | 0.4% | 1.00× | 1.00× | 1.00× |
+| Blocks pruned | MAC cycles skipped | `pointwise_skip_top` (s1) | **`pointwise_skip_pipe_top`** (s1) | `dsc_top` stride 1 | `dsc_top` stride 2 |
+|---|---|---|---|---|---|
+| 30% | ~28–31% | 1.40× | **1.44×** | 1.48× | 1.22× |
+| 50% | ~45–50% | 1.88× | **1.94×** | 1.69× | 1.41× |
+| 70% | ~61–64% | 2.32× | **2.72×** | — | — |
+| 90% | ~73% | 3.15× | **3.70×** | 3.11× | 1.92× |
+| all zero | 75% (cap) | 3.38× | **3.93×** | 3.22× | 1.96× |
+| 50% unstructured | 0.4% | 1.00× | **1.00×** | 1.00× | 1.00× |
 
 (Each test case draws its own random pruning, so the same "50%" lands on slightly
-different skip rates in different suites.)
+different skip rates in different suites. Speedups are always against the same kernel's
+own bypass run.)
 
 - **Speedup tracks the ideal `1 / (1 − skipped)` closely at stride 1.**
-- **The gap at high sparsity is fixed per-pixel overhead.** About 15 cycles per pixel
-  go to loading the input and restarting the pipeline. `pointwise_skip_pipe_top` is a
-  prototype that removes this; its co-sim numbers are still to come.
+- **The gap at high sparsity is fixed per-pixel overhead, and the prototype removes it.**
+  `pointwise_skip_top` spends ~16.6 cycles per pixel loading the input and restarting
+  the pipeline. `pointwise_skip_pipe_top` loads the next pixel during the current one,
+  so a call costs exactly `sched_len × pixels + 405` cycles: ~1.6 cycles per pixel of
+  one-time setup, spread over the layer. At 90% pruning that's 3.70× instead of 3.15×,
+  and with all weights zero 3.93× against a 4× ideal. The same structure would carry
+  over to `pw_stage` in `dsc_top`.
 - **Stride 2 caps near 2×.** The line buffer walks every input pixel at one channel per
   cycle, so depthwise, not pointwise, becomes the bottleneck.
 - **Unstructured pruning gives nothing.** A block of 8 random weights is almost never
@@ -36,6 +42,7 @@ From `timing_results.csv`:
 | Design | HLS estimate | Post-synth | **Post-route** | Fmax | 200 MHz? | LUT / FF / DSP / BRAM18 |
 |---|---|---|---|---|---|---|
 | `pointwise_skip_top` | 3.64 ns | 3.41 ns | **4.26 ns** | ~235 MHz | met | 557 / 607 / 8 / 0 |
+| `pointwise_skip_pipe_top` (prototype) | 3.64 ns | 3.41 ns | **4.19 ns** | ~238 MHz | met | 663 / 576 / 10 / 0 |
 | `dsc_top` (PR #2) | 3.65 ns | 5.09 ns | **5.54 ns** | ~181 MHz | **not met** | 3,662 / 5,162 / 17 / 30 |
 | `dsc_top` + BRAM output register (fix) | 3.65 ns | 3.43 ns | **4.24 ns** | **~236 MHz** | **met** | 3,639 / 5,212 / 17 / 30 |
 
