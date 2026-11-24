@@ -86,12 +86,15 @@ PP_SCHED:
     if (npix == 0) return;
 
     // ---- 3. double-buffered channel vectors ------------------------------------------
-    // v0/v1 alternate: the current pixel reads one while the next pixel is written into
-    // the other. Cyclic partitioning gives PW_UNROLL lanes per cycle, like `in`/`wt`.
-    act_t v0[PW_C_IN], v1[PW_C_IN];
-#pragma HLS ARRAY_PARTITION variable=v0 cyclic factor=PW_UNROLL
-#pragma HLS ARRAY_PARTITION variable=v1 cyclic factor=PW_UNROLL
-    // Why no loop-carried dependence through v0/v1 is real (PP_RUN depth is 9):
+    // vbuf[0] / vbuf[1] alternate: the current pixel reads vbuf[cur] while the next
+    // pixel is written into vbuf[!cur]. The buffer select is part of the ADDRESS, so
+    // each cycle reads only the buffer it uses. (Two separate arrays with a
+    // `cur ? v1[c] : v0[c]` select made the hardware read both and discard one, and
+    // co-sim's dependence checker flagged those discarded reads.)
+    // Cyclic partitioning on dim 2 gives PW_UNROLL lanes per cycle, like `in`/`wt`.
+    act_t vbuf[2][PW_C_IN];
+#pragma HLS ARRAY_PARTITION variable=vbuf cyclic factor=PW_UNROLL dim=2
+    // Why no loop-carried dependence through vbuf is real (PP_RUN depth is 9):
     //  * WAR: buffer X is last read by the final entry of pixel p; the first prefetch
     //    write into X is entry PP_PREFETCH_AT of pixel p+1, >= 17 iterations later.
     //  * RAW: the last prefetch write into X is entry PP_PREFETCH_AT + PW_CBLKS - 1 of
@@ -99,16 +102,15 @@ PP_SCHED:
     // (An earlier version prefetched from entry 0, which put a write one iteration
     // after the previous pixel's last read: co-sim flagged it, and it passed only
     // because of how this build happened to be scheduled.)
-#pragma HLS DEPENDENCE variable=v0 inter false
-#pragma HLS DEPENDENCE variable=v1 inter false
+#pragma HLS DEPENDENCE variable=vbuf inter false
 
-    // Prologue: pixel 0 into v0 (PW_CBLKS cycles, once).
+    // Prologue: pixel 0 into vbuf[0] (PW_CBLKS cycles, once).
 PP_PROLOGUE:
     for (int cb = 0; cb < PW_CBLKS; cb++) {
 #pragma HLS PIPELINE II=1
         for (int u = 0; u < PW_UNROLL; u++) {
 #pragma HLS UNROLL
-            v0[cb * PW_UNROLL + u] = in[cb * PW_UNROLL + u][0][0];
+            vbuf[0][cb * PW_UNROLL + u] = in[cb * PW_UNROLL + u][0][0];
         }
     }
 
@@ -118,7 +120,7 @@ PP_PROLOGUE:
     int y = 0, x = 0;     // current pixel
     int ny = 0, nx = 1;   // next pixel
     if (nx == ww) { nx = 0; ny = 1; }
-    bool cur1 = false;    // false: current pixel is in v0; true: in v1
+    int cur = 0;          // the current pixel's buffer; the next pixel goes to 1 - cur
     acc_t acc = 0;
     const int total = npix * n;
 PP_RUN:
@@ -132,8 +134,7 @@ PP_RUN:
             for (int u = 0; u < PW_UNROLL; u++) {
 #pragma HLS UNROLL
                 const int c = pb * PW_UNROLL + u;
-                const act_t a = in[c][ny][nx];
-                if (cur1) v0[c] = a; else v1[c] = a;
+                vbuf[1 - cur][c] = in[c][ny][nx];
             }
         }
 
@@ -143,7 +144,7 @@ PP_RUN:
         for (int u = 0; u < PW_UNROLL; u++) {
 #pragma HLS UNROLL
             const int c = e.cb * PW_UNROLL + u;
-            const act_t a = cur1 ? v1[c] : v0[c];
+            const act_t a = vbuf[cur][c];
             part += (acc_t)(a * wt[e.k][c]);
         }
         const acc_t base = e.first ? bias[e.k] : acc;
@@ -155,7 +156,7 @@ PP_RUN:
         if (i == n - 1) {
             i = 0;
             p++;
-            cur1 = !cur1;
+            cur = 1 - cur;
             y = ny; x = nx;
             if (nx + 1 == ww) { nx = 0; ny++; } else { nx++; }
         } else {
