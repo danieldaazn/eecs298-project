@@ -8,7 +8,7 @@
 //                        schedule (sched_len cycles), then drain the pipeline before
 //                        the next pixel: ~sched_len + 15 cycles per pixel.
 //   this prototype:      ONE pipeline over every (pixel, schedule entry) pair. During
-//                        a pixel's first PW_CBLKS entries, the next pixel's channel
+//                        PW_CBLKS entries partway through a pixel, the next pixel's channel
 //                        vector is loaded into the other half of a double buffer.
 //                        Pixels follow each other with no load or restart gap:
 //                        sched_len cycles per pixel, plus a one-time prologue.
@@ -21,8 +21,13 @@
 
 #include "dsc_kernels.h"
 
-static_assert(PW_C_OUT >= PW_CBLKS,
-              "prefetch needs at least PW_CBLKS schedule entries per pixel (one per output channel)");
+// The next pixel is prefetched during schedule entries [PP_PREFETCH_AT, PP_PREFETCH_AT +
+// PW_CBLKS) of the current pixel, not from entry 0. That keeps every buffer write well
+// away from that buffer's reads (see the DEPENDENCE note below). A pixel always has at
+// least PW_C_OUT entries (one per output channel), so the window always fits.
+static const int PP_PREFETCH_AT = 16;   // > PP_RUN pipeline depth (9), with margin
+static_assert(PW_C_OUT >= PP_PREFETCH_AT + PW_CBLKS,
+              "prefetch window must fit in the shortest possible schedule (PW_C_OUT entries)");
 
 void pointwise_skip_pipe_top(const act_t in[PW_C_IN][PW_H][PW_W],
                              const wgt_t wt[PW_C_OUT][PW_C_IN],
@@ -86,9 +91,14 @@ PP_SCHED:
     act_t v0[PW_C_IN], v1[PW_C_IN];
 #pragma HLS ARRAY_PARTITION variable=v0 cyclic factor=PW_UNROLL
 #pragma HLS ARRAY_PARTITION variable=v1 cyclic factor=PW_UNROLL
-    // A prefetch write lands >= n - PW_CBLKS >= 60 cycles before that buffer is read
-    // (the next pixel), far beyond the pipeline depth, and the current pixel only reads
-    // the other buffer. So no loop-carried dependence through v0/v1 is real.
+    // Why no loop-carried dependence through v0/v1 is real (PP_RUN depth is 9):
+    //  * WAR: buffer X is last read by the final entry of pixel p; the first prefetch
+    //    write into X is entry PP_PREFETCH_AT of pixel p+1, >= 17 iterations later.
+    //  * RAW: the last prefetch write into X is entry PP_PREFETCH_AT + PW_CBLKS - 1 of
+    //    pixel p+1; X is first read by entry 0 of pixel p+2, >= n - 19 >= 45 later.
+    // (An earlier version prefetched from entry 0, which put a write one iteration
+    // after the previous pixel's last read: co-sim flagged it, and it passed only
+    // because of how this build happened to be scheduled.)
 #pragma HLS DEPENDENCE variable=v0 inter false
 #pragma HLS DEPENDENCE variable=v1 inter false
 
@@ -115,11 +125,13 @@ PP_RUN:
     for (int t = 0; t < total; t++) {
 #pragma HLS PIPELINE II=1
 #pragma HLS LOOP_TRIPCOUNT min=64*64 max=256*256
-        // Prefetch block i of the next pixel during this pixel's first PW_CBLKS entries.
-        if (i < PW_CBLKS && p + 1 < npix) {
+        // Prefetch one block of the next pixel per entry, during entries
+        // [PP_PREFETCH_AT, PP_PREFETCH_AT + PW_CBLKS) of this pixel.
+        const int pb = i - PP_PREFETCH_AT;
+        if (pb >= 0 && pb < PW_CBLKS && p + 1 < npix) {
             for (int u = 0; u < PW_UNROLL; u++) {
 #pragma HLS UNROLL
-                const int c = i * PW_UNROLL + u;
+                const int c = pb * PW_UNROLL + u;
                 const act_t a = in[c][ny][nx];
                 if (cur1) v0[c] = a; else v1[c] = a;
             }
