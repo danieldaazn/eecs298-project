@@ -7,11 +7,12 @@
 // against an independent count. A guard region after the output buffer catches
 // out-of-bounds writes.
 //
-// The pack_* functions double as a reference for Kevin's driver/export.
+// Packing goes through dsc_pack.h, the same code the board bring-up uses.
 
 #include <stdio.h>
 #include <stdint.h>
 #include "dsc_top.h"
+#include "dsc_pack.h"
 #include "dsc_golden.h"
 
 static uint32_t rng_state = 0x2545f491u;
@@ -67,33 +68,40 @@ static void gen(const Case &k) {
     }
 }
 
-static void put_byte(axi_word_t &w, int i, int v) {
-    w |= (axi_word_t)(unsigned)(v & 0xFF) << (8 * i);
-}
-static void put_i32(axi_word_t &w, int j, int v) {
-    for (int i = 0; i < 4; i++) put_byte(w, 4 * j + i, (int)(((uint32_t)v >> (8 * i)) & 0xFF));
+// Pack with the shared host packers (dsc_pack.h, also used on the board), then move
+// the bytes into beats.
+static uint8_t b_in[IN_FRAME_BYTES], b_params[PARAM_BYTES], b_out[OUT_FRAME_BYTES_MAX];
+
+static void pack_input() {
+    dsc_pack_input(g_in, b_in);
+    dsc_bytes_to_beats(b_in, d_in, IN_FRAME_BEATS);
 }
 
-static void pack_input() {  // HWC, 16 channels per beat
-    for (int y = 0; y < DW_H; y++)
-        for (int x = 0; x < DW_W; x++)
-            for (int b = 0; b < IN_PIX_BEATS; b++) {
-                axi_word_t w = 0;
-                for (int i = 0; i < AXI_BYTES; i++) put_byte(w, i, g_in[b * AXI_BYTES + i][y][x]);
-                d_in[(y * DW_W + x) * IN_PIX_BEATS + b] = w;
+static void pack_params() {
+    dsc_pack_params(g_dw_wt, g_dw_b, g_pw_wt, g_pw_b, b_params);
+    dsc_bytes_to_beats(b_params, d_params, PARAM_BEATS);
+}
+
+// Output size computed here, not with the kernel-side dw_out_dim, so a wrong size in
+// the kernel can't be checked against the same wrong size.
+static int out_dim(int n, int stride) { return (n + 2 * 1 - DW_K) / stride + 1; }
+
+// Compares d_out (ho x wo, HWC) with g_pw_out; prints the first few mismatches.
+static int count_mismatches(int ho, int wo, int &mism, const char *tag) {
+    dsc_beats_to_bytes(d_out, b_out, ho * wo * OUT_PIX_BEATS);
+    int bad = 0;
+    for (int y = 0; y < ho; y++)
+        for (int x = 0; x < wo; x++)
+            for (int o = 0; o < PW_C_OUT; o++) {
+                const int got = dsc_output_at(b_out, wo, y, x, o), g = g_pw_out[o][y][x];
+                if (g != got) {
+                    if (mism < 5)
+                        printf("    mismatch (%s) y=%d x=%d k=%d golden=%d got=%d\n", tag, y, x, o, g, got);
+                    mism++;
+                    bad++;
+                }
             }
-}
-
-static void pack_params() {  // layout table in dsc_top.h
-    for (int i = 0; i < PARAM_BEATS; i++) d_params[i] = 0;
-    for (int c = 0; c < DW_C; c++)
-        for (int ky = 0; ky < DW_K; ky++)
-            for (int kx = 0; kx < DW_K; kx++) put_byte(d_params[P_DW_WT + c], 3 * ky + kx, g_dw_wt[c][ky][kx]);
-    for (int c = 0; c < DW_C; c++) put_i32(d_params[P_DW_B + c / 4], c % 4, g_dw_b[c]);
-    for (int o = 0; o < PW_C_OUT; o++)
-        for (int c = 0; c < PW_C_IN; c++)
-            put_byte(d_params[P_PW_WT + o * (PW_C_IN / 16) + c / 16], c % 16, g_pw_wt[o][c]);
-    for (int o = 0; o < PW_C_OUT; o++) put_i32(d_params[P_PW_B + o / 4], o % 4, g_pw_b[o]);
+    return bad;
 }
 
 static int expected_sched_len() {
@@ -115,7 +123,7 @@ static void run_case(const char *name, const Case &k, int stride) {
     pack_input();
     pack_params();
     golden_depthwise(g_in, g_dw_wt, g_dw_b, stride, g_dw_out);
-    const int ho = dw_out_dim(DW_H, stride), wo = dw_out_dim(DW_W, stride);
+    const int ho = out_dim(DW_H, stride), wo = out_dim(DW_W, stride);
     golden_pointwise(g_dw_out, g_pw_wt, g_pw_b, ho, wo, g_pw_out);
 
     const int out_beats = ho * wo * OUT_PIX_BEATS;
@@ -127,23 +135,15 @@ static void run_case(const char *name, const Case &k, int stride) {
         const bool skip_en = (pass == 0);
         for (int i = 0; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++) d_out[i] = sentinel;
         dsc_top(d_in, d_params, d_out, stride, skip_en, len[pass]);
-        for (int y = 0; y < ho; y++)
-            for (int x = 0; x < wo; x++)
-                for (int o = 0; o < PW_C_OUT; o++) {
-                    const axi_word_t w = d_out[(y * wo + x) * OUT_PIX_BEATS + o / AXI_BYTES];
-                    const int got = (int)(uint8_t)(w >> (8 * (o % AXI_BYTES)));
-                    const int g = g_pw_out[o][y][x];
-                    if (skip_en) {
+        count_mismatches(ho, wo, mism, skip_en ? "skip_en=1" : "skip_en=0");
+        if (skip_en)
+            for (int y = 0; y < ho; y++)
+                for (int x = 0; x < wo; x++)
+                    for (int o = 0; o < PW_C_OUT; o++) {
+                        const int g = g_pw_out[o][y][x];
                         total++;
                         if (g > 0 && g < ACT_RELU6_MAX) interior++;
                     }
-                    if (g != got) {
-                        if (mism < 5)
-                            printf("    mismatch (skip_en=%d) y=%d x=%d k=%d golden=%d got=%d\n",
-                                   (int)skip_en, y, x, o, g, got);
-                        mism++;
-                    }
-                }
         for (int i = out_beats; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++)
             if (d_out[i] != sentinel) overrun++;
     }
@@ -189,11 +189,11 @@ int main() {
     {
         gen(typical); pack_input(); pack_params();
         golden_depthwise(g_in, g_dw_wt, g_dw_b, 1, g_dw_out);
-        golden_pointwise(g_dw_out, g_pw_wt, g_pw_b, DW_HO_MAX, DW_WO_MAX, g_pw_out);
+        golden_pointwise(g_dw_out, g_pw_wt, g_pw_b, out_dim(DW_H, 1), out_dim(DW_W, 1), g_pw_out);
         int bad = 0;
         const int strides[] = {0, 3, -1};
         const axi_word_t sentinel = ~(axi_word_t)0;
-        const int out_beats = DW_HO_MAX * DW_WO_MAX * OUT_PIX_BEATS;
+        const int out_beats = out_dim(DW_H, 1) * out_dim(DW_W, 1) * OUT_PIX_BEATS;
         for (int t = 0; t < 3; t++) {
             for (int i = 0; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++) d_out[i] = sentinel;
             int len = -1;
@@ -201,12 +201,8 @@ int main() {
             if (len != expected_sched_len()) bad++;
             for (int i = out_beats; i < OUT_FRAME_BEATS_MAX + OUT_GUARD; i++)
                 if (d_out[i] != sentinel) bad++;
-            for (int y = 0; y < DW_HO_MAX; y++)
-                for (int x = 0; x < DW_WO_MAX; x++)
-                    for (int o = 0; o < PW_C_OUT; o++) {
-                        const axi_word_t w = d_out[(y * DW_WO_MAX + x) * OUT_PIX_BEATS + o / AXI_BYTES];
-                        if ((int)(uint8_t)(w >> (8 * (o % AXI_BYTES))) != g_pw_out[o][y][x]) bad++;
-                    }
+            int m = 0;
+            bad += count_mismatches(DW_HO_MAX, DW_WO_MAX, m, "bad stride");
         }
         printf("[%s] stride 0, 3, -1 run as stride 1           %d mismatches\n", bad ? "FAIL" : "PASS", bad);
         if (bad) g_failures++;

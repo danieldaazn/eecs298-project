@@ -4,9 +4,8 @@
 #   vitis_hls -f run_hls.tcl -tclargs csim_only
 #   vitis_hls -f run_hls.tcl -tclargs xczu5ev-sfvc784-2-e   # other part
 # Same argument conventions as hls/compute/run_hls.tcl. Uses the real hls_stream.h,
-# so compat/ is deliberately NOT on the include path.
-# NOT YET RUN: written without access to Vitis; expect to fix pragma warnings on
-# the first csynth (see ARCHITECTURE.md, "Unverified").
+# so compat/ is deliberately NOT on the include path. Runs from anywhere.
+# Run by Daniel on Vitis HLS 2024.2 / K26 at ecf8a64: C-sim, csynth, co-sim PASS.
 
 set top stream_passthrough_top
 set part xck26-sfvc784-2LV-c   ;# KR260 / K26 SOM
@@ -19,10 +18,13 @@ foreach a $argv {
 }
 puts "run_hls.tcl: top = $top, part = $part, csim_only = $csim_only, cosim = $cosim"
 
+set here [file normalize [file dirname [info script]]]
+cd $here
+source $here/win_cosim_tools.tcl
+
 open_project -reset proj_$top
 set_top $top
 
-set here [file normalize [file dirname [info script]]]
 set cflags "-std=c++14 -I$here/include -I$here/../compute/include -DDSC_USE_AP_TYPES"
 add_files $here/src/mem_stages.cpp      -cflags $cflags
 add_files $here/src/passthrough_top.cpp -cflags $cflags
@@ -35,6 +37,6 @@ create_clock -period 5 -name default   ;# 200 MHz, same target as the compute co
 csim_design
 if { !$csim_only } {
     csynth_design
-    if { $cosim } { cosim_design -rtl verilog }
+    if { $cosim } { win_cosim_zip_fix proj_$top; cosim_design -rtl verilog }
 }
 exit

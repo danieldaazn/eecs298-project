@@ -83,42 +83,64 @@ DW_PIX:
     }
 }
 
-// Per pixel: gather PW_C_IN channels (PW_CBLKS cycles), then run the skip schedule.
+// One pipeline over every (pixel, schedule entry) pair. The next pixel's PW_CBLKS input
+// beats are read from s_dw during entries [PW_PREFETCH_AT, PW_PREFETCH_AT + PW_CBLKS) of
+// the current pixel, into the other half of a double buffer, so pixels follow each other
+// with no gather or pipeline-restart gap: a pixel costs exactly n cycles (n = sched_len).
 // Outputs leave in channel order k = 0..PW_C_OUT-1 (the schedule is k-ordered, one
-// `last` entry per k), packed 16 per beat. Cycles per pixel depend only on the
-// weights (fixed per layer), never on activation data.
+// `last` entry per k), packed 16 per beat. Cycles per pixel depend only on the weights
+// (fixed per layer), never on activation data.
+// (Daniel's structure from hls/compute/src/pointwise_skip_pipe.cpp, co-simmed in this
+// stage on PR #2; see its notes on the prefetch window and why the buffer half is
+// selected by address, not by a mux.)
+static const int PW_PREFETCH_AT = 16;   // > PW_RUN pipeline depth, with margin
+static_assert(PW_C_OUT >= PW_PREFETCH_AT + PW_CBLKS,
+              "prefetch window must fit in the shortest schedule (PW_C_OUT entries)");
+
 static void pw_stage(hls::stream<pw_vec_t> &s_dw, hls::stream<axi_word_t> &s_out,
                      const wgt_t wt[PW_C_OUT][PW_C_IN], const acc_t bias[PW_C_OUT],
                      const pw_sched_t sched[PW_C_OUT * PW_CBLKS], int n, int npix) {
-PW_PIX:
-    for (int p = 0; p < npix; p++) {
-#pragma HLS LOOP_TRIPCOUNT min=64 max=DW_HO_MAX*DW_WO_MAX
-        act_t vec[PW_C_IN];
-#pragma HLS ARRAY_PARTITION variable=vec cyclic factor=PW_UNROLL
-    PW_GATHER:
-        for (int cb = 0; cb < PW_CBLKS; cb++) {
+    act_t vbuf[2][PW_C_IN];
+#pragma HLS ARRAY_PARTITION variable=vbuf cyclic factor=PW_UNROLL dim=2
+    // WAR gap >= PW_PREFETCH_AT + 1 iterations, RAW gap >= n - PW_PREFETCH_AT - PW_CBLKS + 1
+    // >= 45: both beyond the pipeline depth, so no loop-carried dependence is real.
+#pragma HLS DEPENDENCE variable=vbuf inter false
+
+    if (npix <= 0) return;
+PW_PROLOGUE:
+    for (int cb = 0; cb < PW_CBLKS; cb++) {
 #pragma HLS PIPELINE II=1
+        const pw_vec_t v = s_dw.read();
+        for (int u = 0; u < PW_UNROLL; u++) {
+#pragma HLS UNROLL
+            vbuf[0][cb * PW_UNROLL + u] = word_byte(v, u);
+        }
+    }
+
+    int i = 0, p = 0, cur = 0;
+    acc_t acc = 0;
+    axi_word_t ow = 0;
+    const int total = npix * n;
+PW_RUN:
+    for (int t = 0; t < total; t++) {
+#pragma HLS PIPELINE II=1
+#pragma HLS LOOP_TRIPCOUNT min=64*64 max=256*256
+        const int pb = i - PW_PREFETCH_AT;
+        if (pb >= 0 && pb < PW_CBLKS && p + 1 < npix) {
             const pw_vec_t v = s_dw.read();
             for (int u = 0; u < PW_UNROLL; u++) {
 #pragma HLS UNROLL
-                vec[cb * PW_UNROLL + u] = word_byte(v, u);
+                vbuf[1 - cur][pb * PW_UNROLL + u] = word_byte(v, u);
             }
         }
-
-        acc_t acc = 0;
-        axi_word_t ow = 0;
-    PW_RUN:
-        for (int i = 0; i < n; i++) {
-#pragma HLS PIPELINE II=1
-#pragma HLS LOOP_TRIPCOUNT min=64 max=256
-            const pw_sched_t e = sched[i];
-            act_t o;
-            if (pw_sched_step(e, vec, wt, bias, acc, o)) {
-                const int lane = e.k % AXI_BYTES;
-                ow = word_set_byte(ow, lane, o);
-                if (lane == AXI_BYTES - 1) s_out.write(ow);
-            }
+        const pw_sched_t e = sched[i];
+        act_t o;
+        if (pw_sched_step(e, vbuf[cur], wt, bias, acc, o)) {
+            const int lane = e.k % AXI_BYTES;
+            ow = word_set_byte(ow, lane, o);
+            if (lane == AXI_BYTES - 1) s_out.write(ow);
         }
+        if (i == n - 1) { i = 0; p++; cur = 1 - cur; } else { i++; }
     }
 }
 
@@ -157,6 +179,11 @@ void dsc_top(const axi_word_t *in,
 #pragma HLS INTERFACE m_axi port=in     bundle=gmem_rd offset=slave depth=IN_FRAME_BEATS max_read_burst_length=64
 #pragma HLS INTERFACE m_axi port=params bundle=gmem_rd offset=slave depth=PARAM_BEATS max_read_burst_length=64
 #pragma HLS INTERFACE m_axi port=out    bundle=gmem_wr offset=slave depth=OUT_FRAME_BEATS_MAX max_write_burst_length=64
+    // Buffer addresses in the same AXI-Lite bank as everything else (without these,
+    // offset=slave puts them in a second slave, control_r). Agreed on PR #2.
+#pragma HLS INTERFACE s_axilite port=in     bundle=control
+#pragma HLS INTERFACE s_axilite port=params bundle=control
+#pragma HLS INTERFACE s_axilite port=out    bundle=control
 #pragma HLS INTERFACE s_axilite port=stride    bundle=control
 #pragma HLS INTERFACE s_axilite port=skip_en   bundle=control
 #pragma HLS INTERFACE s_axilite port=sched_len bundle=control
@@ -168,6 +195,9 @@ void dsc_top(const axi_word_t *in,
     acc_t dw_b[DW_C];
     wgt_t pw_wt[PW_C_OUT][PW_C_IN];
 #pragma HLS ARRAY_PARTITION variable=pw_wt cyclic factor=PW_UNROLL dim=2
+    // BRAM output register: takes the BRAM read off the multiply-add cycle (Daniel's
+    // post-route run: 5.536 ns -> 4.243 ns at the 200 MHz target).
+#pragma HLS BIND_STORAGE variable=pw_wt type=ram_t2p impl=bram latency=2
     acc_t pw_b[PW_C_OUT];
     pw_sched_t sched[PW_C_OUT * PW_CBLKS];
 
