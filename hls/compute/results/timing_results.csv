@@ -1,0 +1,7 @@
+# Timing and resources, part xck26-sfvc784-2LV-c, 5.000 ns (200 MHz) constraint, Vitis HLS / Vivado 2024.2.
+# hls_est_ns: HLS csynth estimate. post_synth_ns / post_route_ns: Vivado, out-of-context (export_design -flow impl).
+# fmax_mhz = 1000 / post_route_ns. Resources are post-route.
+# dsc_top = Hank's fused block, PR #2 @ ecf8a64 (variant 'bram_lat2' = + BIND_STORAGE pw_wt latency=2, experiment only).
+design,variant,hls_est_ns,post_synth_ns,post_route_ns,fmax_mhz,timing_met_200,lut,ff,dsp,bram18,srl,clb
+pointwise_skip_top,baseline,3.644,3.408,4.260,234.7,yes,557,607,8,0,15,132
+dsc_top,baseline,3.650,5.087,5.536,180.6,no,3662,5162,17,30,626,946
