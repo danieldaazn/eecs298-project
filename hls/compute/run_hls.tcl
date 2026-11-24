@@ -28,12 +28,17 @@ foreach a $argv {
 }
 puts "run_hls.tcl: top = $top, part = $part, csim_only = $csim_only, cosim = $cosim"
 
+# Run from this script's directory, so it works from anywhere (e.g.
+# vitis_hls -f hls/compute/run_hls.tcl from the repo root); the project folder
+# proj_<top> is created next to this script.
+set here [file normalize [file dirname [info script]]]
+cd $here
+
 open_project -reset proj_$top
 set_top $top
 
 # Absolute include paths: C-sim compiles from inside the project directory, where
 # relative -I paths would no longer resolve.
-set here [file normalize [file dirname [info script]]]
 set cflags "-std=c++14 -I$here/include -I$here/golden -DDSC_USE_AP_TYPES"
 add_files src/requant.cpp   -cflags $cflags
 add_files src/depthwise.cpp -cflags $cflags

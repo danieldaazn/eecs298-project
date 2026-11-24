@@ -83,7 +83,61 @@ static void gen_pw(const GenParams& p) {
 }
 
 // ---- run + compare -------------------------------------------------------------
-static void run_dw(const char* name, int stride) {
+// Every kernel output buffer is filled with SENTINEL before each call. No valid
+// activation can be 255 (ReLU6 caps at ACT_RELU6_MAX = 192), so:
+//   * inside the valid region, a kernel that fails to write an output can't pass by
+//     inheriting a previous run's correct value;
+//   * outside it, any element that is no longer SENTINEL was written out of bounds.
+static const int SENTINEL = 255;
+
+static void fill_dw_out() {
+    for (int c = 0; c < DW_C; c++)
+        for (int y = 0; y < DW_HO_MAX; y++)
+            for (int x = 0; x < DW_WO_MAX; x++)
+                k_dw_out[c][y][x] = (act_t)SENTINEL;
+}
+
+static void fill_pw_out() {
+    for (int k = 0; k < PW_C_OUT; k++)
+        for (int y = 0; y < PW_H; y++)
+            for (int x = 0; x < PW_W; x++)
+                k_pw_out[k][y][x] = (act_t)SENTINEL;
+}
+
+// Compares a kernel output buffer against the golden one over the whole array:
+// [0,h) x [0,w) must match golden, everything else must still be SENTINEL.
+// Adds to *mism (prints the first few) and to *interior / *total for valid outputs.
+template <int C, int H, int W>
+static void compare_out(const int g[C][H][W], const act_t k[C][H][W], int h, int w,
+                        const char* tag, int* mism, int* interior, int* total) {
+    for (int c = 0; c < C; c++)
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++) {
+                const int kv = (int)k[c][y][x];
+                const bool valid = (y < h) && (x < w);
+                const int want = valid ? g[c][y][x] : SENTINEL;
+                if (valid) {
+                    (*total)++;
+                    if (want > 0 && want < ACT_RELU6_MAX) (*interior)++;
+                }
+                if (kv != want) {
+                    if (*mism < 5)
+                        printf("    mismatch%s c=%d y=%d x=%d %s=%d kernel=%d\n", tag, c, y, x,
+                               valid ? "golden" : "untouched", want, kv);
+                    (*mism)++;
+                }
+            }
+}
+
+// Depthwise output size computed here, independently of the kernel's dw_out_dim().
+static int ref_out_dim(int in_dim, int stride) {
+    return (in_dim + 2 * 1 - 3) / stride + 1;   // 3x3, padding 1
+}
+
+// kernel_stride is passed to the kernel; the spec is that anything other than 2
+// behaves as stride 1, so the golden model runs at that effective stride.
+static void run_dw(const char* name, int kernel_stride) {
+    const int stride = (kernel_stride == 2) ? 2 : 1;
     for (int c = 0; c < DW_C; c++) {
         for (int y = 0; y < DW_H; y++)
             for (int x = 0; x < DW_W; x++)
@@ -94,28 +148,18 @@ static void run_dw(const char* name, int stride) {
         k_dw_b[c] = (acc_t)g_dw_b[c];
     }
     golden_depthwise(g_dw_in, g_dw_wt, g_dw_b, stride, g_dw_out);
-    depthwise_top(k_dw_in, k_dw_wt, k_dw_b, stride, k_dw_out);
+    fill_dw_out();
+    depthwise_top(k_dw_in, k_dw_wt, k_dw_b, kernel_stride, k_dw_out);
 
-    const int ho = dw_out_dim(DW_H, stride), wo = dw_out_dim(DW_W, stride);
+    const int ho = ref_out_dim(DW_H, stride), wo = ref_out_dim(DW_W, stride);
     int mism = 0, interior = 0, total = 0;
-    for (int c = 0; c < DW_C; c++)
-        for (int y = 0; y < ho; y++)
-            for (int x = 0; x < wo; x++) {
-                int g = g_dw_out[c][y][x], k = (int)k_dw_out[c][y][x];
-                total++;
-                if (g > 0 && g < ACT_RELU6_MAX) interior++;
-                if (g != k) {
-                    if (mism < 5)
-                        printf("    mismatch c=%d y=%d x=%d golden=%d kernel=%d\n", c, y, x, g, k);
-                    mism++;
-                }
-            }
+    compare_out<DW_C, DW_HO_MAX, DW_WO_MAX>(g_dw_out, k_dw_out, ho, wo, "", &mism, &interior, &total);
     printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
            mism ? "FAIL" : "PASS", name, total, interior, mism);
     if (mism) g_failures++;
 }
 
-static void run_pw(const char* name, int h, int w) {
+static void load_pw_kernel_inputs() {
     for (int c = 0; c < PW_C_IN; c++)
         for (int y = 0; y < PW_H; y++)
             for (int x = 0; x < PW_W; x++)
@@ -125,22 +169,19 @@ static void run_pw(const char* name, int h, int w) {
             k_pw_wt[k][c] = (wgt_t)g_pw_wt[k][c];
         k_pw_b[k] = (acc_t)g_pw_b[k];
     }
+}
+
+// kh/kw are passed to the kernel; the spec is that they're clamped to PW_H/PW_W, so
+// the golden model runs at the clamped size.
+static void run_pw(const char* name, int kh, int kw) {
+    const int h = kh < PW_H ? kh : PW_H, w = kw < PW_W ? kw : PW_W;
+    load_pw_kernel_inputs();
     golden_pointwise(g_pw_in, g_pw_wt, g_pw_b, h, w, g_pw_out);
-    pointwise_top(k_pw_in, k_pw_wt, k_pw_b, h, w, k_pw_out);
+    fill_pw_out();
+    pointwise_top(k_pw_in, k_pw_wt, k_pw_b, kh, kw, k_pw_out);
 
     int mism = 0, interior = 0, total = 0;
-    for (int k = 0; k < PW_C_OUT; k++)
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                int g = g_pw_out[k][y][x], kk = (int)k_pw_out[k][y][x];
-                total++;
-                if (g > 0 && g < ACT_RELU6_MAX) interior++;
-                if (g != kk) {
-                    if (mism < 5)
-                        printf("    mismatch k=%d y=%d x=%d golden=%d kernel=%d\n", k, y, x, g, kk);
-                    mism++;
-                }
-            }
+    compare_out<PW_C_OUT, PW_H, PW_W>(g_pw_out, k_pw_out, h, w, "", &mism, &interior, &total);
     printf("[%s] %-34s %5d outputs, %5d interior, %d mismatches\n",
            mism ? "FAIL" : "PASS", name, total, interior, mism);
     if (mism) g_failures++;
@@ -178,19 +219,15 @@ static int expected_sched_len() {
 
 // Runs pointwise_skip_top with skipping on and off; both must match the golden model
 // bit-exactly, and the schedule lengths must match the independent expectation.
-static void run_pw_skip(const char* name, int h, int w) {
-    for (int c = 0; c < PW_C_IN; c++)
-        for (int y = 0; y < PW_H; y++)
-            for (int x = 0; x < PW_W; x++)
-                k_pw_in[c][y][x] = (act_t)g_pw_in[c][y][x];
+// The output buffer is refilled with SENTINEL before each pass, so the bypass pass
+// can't pass on outputs left over from the skip-on pass.
+static void run_pw_skip(const char* name, int kh, int kw) {
+    const int h = kh < PW_H ? kh : PW_H, w = kw < PW_W ? kw : PW_W;
+    load_pw_kernel_inputs();
     int zero_wgts = 0;
-    for (int k = 0; k < PW_C_OUT; k++) {
-        for (int c = 0; c < PW_C_IN; c++) {
-            k_pw_wt[k][c] = (wgt_t)g_pw_wt[k][c];
+    for (int k = 0; k < PW_C_OUT; k++)
+        for (int c = 0; c < PW_C_IN; c++)
             if (g_pw_wt[k][c] == 0) zero_wgts++;
-        }
-        k_pw_b[k] = (acc_t)g_pw_b[k];
-    }
     golden_pointwise(g_pw_in, g_pw_wt, g_pw_b, h, w, g_pw_out);
 
     const int dense_len = PW_C_OUT * PW_CBLKS;
@@ -201,23 +238,14 @@ static void run_pw_skip(const char* name, int h, int w) {
     for (int pass = 0; pass < 2; pass++) {
         const bool skip_en = (pass == 0);
         int len = -1;
-        pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, h, w, skip_en, k_pw_out, len);
+        fill_pw_out();
+        pointwise_skip_top(k_pw_in, k_pw_wt, k_pw_b, kh, kw, skip_en, k_pw_out, len);
         (skip_en ? len_skip : len_dense) = len;
-        for (int k = 0; k < PW_C_OUT; k++)
-            for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++) {
-                    int g = g_pw_out[k][y][x], kk = (int)k_pw_out[k][y][x];
-                    if (skip_en) {
-                        total++;
-                        if (g > 0 && g < ACT_RELU6_MAX) interior++;
-                    }
-                    if (g != kk) {
-                        if (mism < 5)
-                            printf("    mismatch (skip_en=%d) k=%d y=%d x=%d golden=%d kernel=%d\n",
-                                   (int)skip_en, k, y, x, g, kk);
-                        mism++;
-                    }
-                }
+        int pass_interior = 0, pass_total = 0;
+        compare_out<PW_C_OUT, PW_H, PW_W>(g_pw_out, k_pw_out, h, w,
+                                          skip_en ? " (skip on)" : " (bypass)",
+                                          &mism, &pass_interior, &pass_total);
+        if (skip_en) { interior = pass_interior; total = pass_total; }
     }
 
     bool len_ok = (len_skip == exp_len) && (len_dense == dense_len);
@@ -282,6 +310,11 @@ int main() {
     gen_dw(dw_sat);    run_dw("depthwise saturate high", 1);
     gen_dw(dw_neg);    run_dw("depthwise saturate low", 2);
     gen_dw(dw_zero);   run_dw("depthwise all-zero weights", 1);
+    gen_dw(dw_rand);   run_dw("depthwise stride 3 (runs as 1)", 3);
+    gen_dw(dw_rand);   run_dw("depthwise stride 0 (runs as 1)", 0);
+    // Bias at the documented limit (|bias| <= BIAS_ABS_MAX) with the largest products.
+    GenParams dw_bigb = {0, 255, -128, 127, -BIAS_ABS_MAX, BIAS_ABS_MAX, 0};
+    gen_dw(dw_bigb);   run_dw("depthwise bias at limit", 2);
 
     GenParams pw_rand = {0, 192, -32, 31, -20000, 20000, 0};
     GenParams pw_sparse = pw_rand;  pw_sparse.zero_wgt_pct = 50;
@@ -293,6 +326,10 @@ int main() {
     gen_pw(pw_sparse); run_pw("pointwise 50% zero weights", PW_H, PW_W);
     gen_pw(pw_wide);   run_pw("pointwise full weight range", PW_H, PW_W);
     gen_pw(pw_sat);    run_pw("pointwise saturate high", PW_H, PW_W);
+    gen_pw(pw_rand);   run_pw("pointwise h/w too big (clamped)", PW_H + 5, PW_W + 9);
+    gen_pw(pw_rand);   run_pw("pointwise h=w=0 (writes nothing)", 0, 0);
+    GenParams pw_bigb = {0, 255, -128, 127, -BIAS_ABS_MAX, BIAS_ABS_MAX, 0};
+    gen_pw(pw_bigb);   run_pw("pointwise bias at limit", PW_H, PW_W);
 
     // Zero-block skipping: block-structured sparsity sweep, plus cases that stress
     // the schedule (all zero, unstructured zeros that rarely fill a whole block).
@@ -305,6 +342,8 @@ int main() {
     gen_pw_blocks(pw_rand, 100); run_pw_skip("skip: all weights zero", PW_H, PW_W);
     gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: 50% blocks pruned, 8x8", 8, 8);
     gen_pw_blocks(pw_sparse, 0); run_pw_skip("skip: 50% unstructured zeros", PW_H, PW_W);
+    gen_pw_blocks(pw_rand, 50);  run_pw_skip("skip: h/w too big (clamped)", PW_H + 3, PW_W + 7);
+    gen_pw_blocks(pw_bigb, 50);  run_pw_skip("skip: bias at limit", PW_H, PW_W);
 
     if (g_failures) {
         printf("\nC-SIM FAILED: %d test(s) failed\n", g_failures);

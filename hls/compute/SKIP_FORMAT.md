@@ -1,8 +1,10 @@
 # Pruned-weight format for zero-skipping
 
-**Shared interface:** this is the contract between Kevin's pruning/export and Daniel's
-skip hardware. Changing it (especially the block size) needs agreement from both sides.
-See CLAUDE.md.
+**Status: PROPOSAL, not yet signed off by Kevin.** This is the proposed contract
+between Kevin's pruning/export and Daniel's skip hardware (a shared interface; see
+CLAUDE.md). The hardware is built and verified against it, but until Kevin confirms
+it, treat it like the placeholder types in `include/dsc_types.h`. Changing it later,
+especially the block size, needs agreement from both sides.
 
 ## What the hardware skips
 
@@ -31,6 +33,10 @@ taps all run in the same cycle, so a zero tap saves nothing, and depthwise is on
 - **Unstructured pruning doesn't help.** Measured: 50% of weights zeroed at random
   skipped **0.4%** of cycles, because 8 random weights are almost never all zero.
 - **Bias stays as is.** Pruned blocks don't change how the bias is applied.
+- **Bias limit: |bias| ≤ 2^24 (raw, 12 fractional bits, i.e. ±4096.0).** The
+  requantization relies on it to rule out overflow (`BIAS_ABS_MAX` in
+  `include/dsc_types.h`). Real biases are far smaller (6.0 is 24,576 raw), so this
+  should never bind, but the exporter should check it.
 
 ## Measured results (32 → 64 channels, 16×16 pixels, 4 blocks per output)
 

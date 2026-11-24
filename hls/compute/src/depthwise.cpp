@@ -30,6 +30,10 @@ void depthwise_top(const act_t in[DW_C][DW_H][DW_W],
     // Standalone C-sim / csynth-estimate wrapper; see dsc_kernels.h.
 #pragma HLS ARRAY_PARTITION variable=wt complete dim=2
 #pragma HLS ARRAY_PARTITION variable=wt complete dim=3
+    // Only strides 1 and 2 are supported: anything other than 2 runs as 1, matching
+    // dw_out_dim() and the streaming top (hls/top). Indexing as a shift by
+    // stride_log2 also avoids a multiplier on the address path.
+    const int stride_log2 = (stride == 2) ? 1 : 0;
     const int ho = dw_out_dim(DW_H, stride);
     const int wo = dw_out_dim(DW_W, stride);
 
@@ -48,8 +52,8 @@ DW_ROWS:
                 for (int ky = 0; ky < DW_K; ky++) {
                 GATHER_X:
                     for (int kx = 0; kx < DW_K; kx++) {
-                        int iy = oy * stride + ky - DW_PAD;
-                        int ix = ox * stride + kx - DW_PAD;
+                        int iy = (oy << stride_log2) + ky - DW_PAD;
+                        int ix = (ox << stride_log2) + kx - DW_PAD;
                         bool inside = (iy >= 0) && (iy < DW_H) && (ix >= 0) && (ix < DW_W);
                         win[ky][kx] = inside ? in[c][iy][ix] : (act_t)0;
                     }

@@ -17,9 +17,14 @@
 //   product            : Q4.12  (5 + 7 fractional bits)
 //   accumulator acc_t  : signed 32-bit,  12 fractional bits. Bias is stored in this
 //                        scale so it adds directly. 32 bits is generous: worst case
-//                        |product| = 255*128 = 32640 (16 bits), times PW_C_IN = 256
-//                        terms is < 2^24, so ~25 bits would suffice. Hank/Kevin may
-//                        want this narrowed for stream width.
+//                        |product| = 255*128 = 32640, times PW_C_IN = 32 terms is
+//                        ~2^20, and |bias| <= BIAS_ABS_MAX = 2^24 (below), so |acc|
+//                        < 2^25 and ~26 bits would suffice. Hank/Kevin may want this
+//                        narrowed for stream width.
+//   bias               : acc_t scale, |bias| <= BIAS_ABS_MAX (2^24, i.e. 4096.0).
+//                        PART OF THE EXPORT CONTRACT: the requantization assumes it
+//                        (acc + rounding offset must not overflow). Real biases are
+//                        tiny by comparison (ReLU6's 6.0 is 24,576 in this scale).
 //
 // Requantization (acc -> act): shift right by (ACC_FRAC - ACT_FRAC) = 7 with
 // round-half-up, then clamp to [0, ACT_RELU6_MAX]. This is MobileNetV1-style:
@@ -48,6 +53,7 @@ static const int WGT_FRAC      = 7;
 static const int ACC_FRAC      = ACT_FRAC + WGT_FRAC;   // 12
 static const int REQUANT_SHIFT = ACC_FRAC - ACT_FRAC;   // 7
 static const int ACT_RELU6_MAX = 6 << ACT_FRAC;         // 192
+static const int BIAS_ABS_MAX  = 1 << 24;                // export contract, see above
 
 // ---- Layer dimensions (placeholder test layer, compile-time maxima) -----------
 // Sized for a small MobileNet-style block. Kevin's test images will set the real
