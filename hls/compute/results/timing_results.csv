@@ -5,3 +5,4 @@
 design,variant,hls_est_ns,post_synth_ns,post_route_ns,fmax_mhz,timing_met_200,lut,ff,dsp,bram18,srl,clb
 pointwise_skip_top,baseline,3.644,3.408,4.260,234.7,yes,557,607,8,0,15,132
 dsc_top,baseline,3.650,5.087,5.536,180.6,no,3662,5162,17,30,626,946
+dsc_top,bram_lat2,3.650,3.426,4.243,235.7,yes,3639,5212,17,30,632,951

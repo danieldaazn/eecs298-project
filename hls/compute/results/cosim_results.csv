@@ -22,3 +22,9 @@ dsc_top,2,50% blocks pruned,50,141,13868,19622
 dsc_top,2,90% blocks pruned,90,68,10221,19622
 dsc_top,2,all weights zero,100,64,10018,19622
 dsc_top,2,50% unstructured zeros,0,255,19566,19622
+dsc_top+bram_lat2,1,dense,0,256,71542,71534
+dsc_top+bram_lat2,1,30% blocks pruned,30,166,48497,71534
+dsc_top+bram_lat2,1,50% blocks pruned,50,142,42351,71534
+dsc_top+bram_lat2,1,90% blocks pruned,90,67,23150,71534
+dsc_top+bram_lat2,1,all weights zero,100,64,22387,71534
+dsc_top+bram_lat2,1,50% unstructured zeros,0,256,71534,71534

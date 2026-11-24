@@ -37,6 +37,7 @@ From `timing_results.csv`:
 |---|---|---|---|---|---|---|
 | `pointwise_skip_top` | 3.64 ns | 3.41 ns | **4.26 ns** | ~235 MHz | met | 557 / 607 / 8 / 0 |
 | `dsc_top` (PR #2) | 3.65 ns | 5.09 ns | **5.54 ns** | ~181 MHz | **not met** | 3,662 / 5,162 / 17 / 30 |
+| `dsc_top` + BRAM output register (fix) | 3.65 ns | 3.43 ns | **4.24 ns** | **~236 MHz** | **met** | 3,639 / 5,212 / 17 / 30 |
 
 **HLS estimates were wrong in both directions:**
 - **Timing was optimistic.** HLS predicted ~274 MHz for both designs.
@@ -57,17 +58,22 @@ multiply-add in `pw_stage`'s `PW_RUN` loop. In one cycle it does:
 `pointwise_skip_top` has the same multiply-add but receives its weights through a port,
 not from an on-chip BRAM, which is why it meets timing with room to spare.
 
-**Candidate fix (experiment running):** enable the BRAM output register with one line
-in `dsc_top.cpp`:
+**Fix (tested): enable the BRAM output register**, one line in `dsc_top.cpp` after the
+`pw_wt` partition pragma:
 
 ```cpp
 #pragma HLS BIND_STORAGE variable=pw_wt type=ram_t2p impl=bram latency=2
 ```
 
-This takes the BRAM read off the critical cycle at the cost of one extra pipeline stage.
-The initiation interval should stay 1, so throughput is unchanged. It's being tested on
-a scratch copy of PR #2: co-sim (bit-exactness and cycles) plus place & route. Result:
-**pending**.
+Tested on a scratch copy of PR #2 (`ecf8a64` + this line):
 
-If it isn't enough: register the weight vector after the read, or run the kernel at a
-lower clock. 181 MHz still works, at ~10% lower throughput.
+- **Timing met:** post-route 4.243 ns (~236 MHz), slack +0.757 ns, up from 5.536 ns.
+  The new worst path is the DSP multiply-add alone.
+- **Resources:** unchanged (−23 LUT, +50 FF).
+- **Throughput:** `PW_RUN` stays at II=1 with one more pipeline stage (depth 10 → 11).
+- **Cost: +0.35% cycles.** The dense stride-1 layer goes from 71,282 to 71,534 cycles, about
+  one cycle per pixel. Every pruning level shifts by the same ~250 cycles (rows
+  `dsc_top+bram_lat2` in `cosim_results.csv`).
+- **Correctness:** co-sim passes, bit-exact on all cases.
+
+It's Hank's file, so this goes to him as a suggested change for #2.
