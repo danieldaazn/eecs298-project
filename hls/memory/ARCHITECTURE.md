@@ -15,7 +15,7 @@ kernel; joint Hank/Daniel interface).
 | csynth / co-sim / IP export | **Pass** (Daniel, Vitis HLS 2024.2, `xck26-sfvc784-2LV-c`, at `ecf8a64`): every pipelined loop at its target II, co-sim bit-exact on all 43 calls |
 | Post-route timing | `ecf8a64`: 5.54 ns (~181 MHz), **misses 200 MHz**. With Daniel's BRAM output-register fix + overlapped `pw_stage` (both now in): **4.28 ns, ~234 MHz, met**, co-sim bit-exact (Daniel, on a scratch copy; re-run on this branch to confirm) |
 | Resources (post-route) | 3,704 LUT / 5,330 FF / 19 DSP / 30 BRAM18 (~3 % / 2 % / 2 % / 10 % of the K26) |
-| Board | Week 9 flow: see "Week 9" below |
+| Board flow | Written (`board/`, see `board/README.md`): Vivado block design → bitstream/XSA → Kria Ubuntu overlay → bring-up test. **Not yet run**: no Vivado or board here. The bring-up program passes end to end against the C-sim kernel (`make -C board/sw hostsim`) |
 
 To repeat the `ap_int` C-sim without Vitis, from `hls/top/`:
 
@@ -222,28 +222,68 @@ Behavior worth knowing for the driver:
 - `skip_en = 0` is Daniel's dense bypass on the same bitstream (pruned-with-skip vs
   pruned-without-skip, for Week 10).
 
-## Week 9 draft: Vivado block-design topology (for Kevin's IPI assembly)
+## Week 9: board integration (`board/`)
 
-Proposed split: Hank owns the memory/AXI side below, Kevin owns the PS configuration
-and the driver.
+Everything is scripted. `board/README.md` has the steps, from the HLS export to a
+passing run on the KR260.
 
-- `m_axi_gmem_rd` → `S_AXI_HP0_FPD`, `m_axi_gmem_wr` → `S_AXI_HP1_FPD`, each through
-  its own SmartConnect, 128-bit.
-- `s_axi_control` ← `M_AXI_HPM0_FPD` (or LPD) via SmartConnect. Its base address comes
-  from the Vivado address editor and goes in Kevin's driver.
-- `interrupt` → `pl_ps_irq0`. One PL clock at 200 MHz to start, which is also the
-  clock the energy-adaptive feature would scale.
-- **The HP ports are not cache-coherent.** The driver must use non-cacheable,
-  physically contiguous buffers (e.g. u-dma-buf/CMA), or flush before start and
-  invalidate after done. If that's painful, `S_AXI_HPC0/1_FPD` are coherent, at some
-  bandwidth cost, which we don't need anyway.
+- **Block design** (`board/vivado/build_bd.tcl`), all at `pl_clk0` = 200 MHz:
+  - `m_axi_gmem_rd` → `S_AXI_HP0_FPD` and `m_axi_gmem_wr` → `S_AXI_HP1_FPD`, each
+    through its own SmartConnect, 128-bit.
+  - `s_axi_control` ← `M_AXI_HPM0_FPD` via SmartConnect, at **0xA000_0000**, 64 KB.
+  - `interrupt` → `pl_ps_irq0[0]` (GIC SPI 89).
+  - The script fails without copying a bitstream if WNS < 0.
+- **PS configuration:** the KR260 board preset plus six overrides, marked in the
+  script for **Kevin's review** (he owns the PS side). Kria Ubuntu loads the PL at
+  runtime and leaves the PS as booted, so the device-tree overlay is what actually sets
+  the PL clock and the AFI widths.
+- **Firmware** (`board/firmware/`): `xmutil loadapp dsc_accel` loads a `.bit.bin`, a
+  `.dtbo` and a `shell.json` from `/lib/firmware/xilinx/dsc_accel/`. `install.sh`
+  builds them on the board and loads them. The overlay binds the accelerator to
+  `generic-uio`, so the driver runs entirely from user space: registers via `mmap`,
+  the interrupt via `read()`.
+- **Buffers:** the HP ports are not cache-coherent. The bring-up program uses one
+  u-dma-buf opened `O_SYNC` (uncached), so no cache maintenance is needed. It copies
+  into the buffer with aligned 64-bit accesses, because uncached memory on arm64 is
+  Device memory, where `memcpy`'s unaligned accesses can fault. Kevin's driver can
+  copy this.
+- **Bring-up / benchmark** (`board/sw/dsc_bringup`):
+  - Checks every output byte against the golden model, plus the overrun guard and
+    `sched_len`, at 0–100 % block sparsity × both strides × skip on/off.
+  - Accepts Kevin's VECTORS.md case folders (`--case DIR`).
+  - Times each point and writes a CSV for the results table.
+  - Register offsets are the prediction above. Copying the generated `xdsc_top_hw.h`
+    into `board/sw/` turns them into compile-time checks.
 
-## Week 10 plan: latency breakdown
+## Week 10: latency breakdown
 
-Measure total cycles (ap_start→ap_done) at each sparsity point and both strides, then
-compare against the model above: prologue (~770) + max(pointwise, window_gen) +
-drain. The gap is the "memory-bound vs compute-bound" evidence: given the bandwidth
-numbers, it should be small at stride 1, and show the line-buffer ceiling at stride 2.
+What the numbers should look like, from co-sim and the model:
+
+- **Compute, stride 1:** `256·sched_len + 1,672` cycles. Dense is 67,208 cycles, 336 µs.
+- **Memory traffic:** ~11 KB read (input + params) and ≤16 KB written per call. At
+  ~3.2 GB/s per HP port that is under 5 µs on each port, and it streams in parallel
+  with compute rather than before or after it.
+- So the block is **compute-bound at every sparsity level**. What limits speedup is
+  the fixed ~1.7k-cycle prologue and drain, plus (at stride 2) the line buffer's
+  9-reads-per-output ceiling. DRAM bandwidth isn't a factor.
+
+`dsc_bringup` prints measured time next to this model:
+
+- skip on, skip off, and the speedup;
+- the equivalent cycles at 200 MHz;
+- the model's predicted cycles.
+
+The measured time includes a few µs of user-space start/finish handshake. Measured
+minus model gives three things:
+
+- the per-call software overhead;
+- whether DRAM latency shows up at all (it shouldn't);
+- for Kevin's report, the memory-bound vs compute-bound split.
+
+The same numbers settle ping-pong buffering. Double-buffering whole frames only pays off
+if transfer time is comparable to compute. Predicted, it is under 5 µs against 90–336 µs,
+so it isn't. Once the board confirms that, it is the evidence for the single-buffer
+streaming design (see "Ping-pong vs single buffer").
 
 ## Verified by Daniel's Vitis runs (at `ecf8a64`)
 
@@ -267,7 +307,9 @@ regenerates `xdsc_top_hw.h` for the register map above.
   blob (`hls/top/include/dsc_pack.h` is the C implementation of the exact byte layout,
   shared by the testbench and the board bring-up); tell us the test-image sizes and
   whether the model has stride-2 blocks at high sparsity (line-buffer ceiling).
-- **Daniel:** one Vitis run on this branch (above).
+- **Daniel:** one Vitis run on this branch (above), then
+  `board\vivado\build_bd_win.bat` on `board-integration` for the first bitstream.
+- **Kevin:** review the PS overrides in `board/vivado/build_bd.tcl`.
 - **All:** the kernel runs **one fixed layer shape** (compile-time `DW_H/W/C`,
   `PW_C_OUT`). A real MobileNet has many shapes, so we need to pick between runtime
   dimensions with compile-time maxima (my preference: one bitstream, and the line

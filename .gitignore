@@ -3,3 +3,10 @@ hls/**/build/
 # Vitis HLS project directories and logs
 hls/**/proj_*/
 *.log
+# Board flow outputs (Vivado project, bitstream/XSA, binaries)
+board/vivado/proj_*/
+board/vivado/.Xil/
+board/firmware/out/
+board/sw/dsc_bringup
+board/sw/dsc_bringup_hostsim
+*.jou
