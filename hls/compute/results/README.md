@@ -147,3 +147,41 @@ changes at 200 MHz, stride 1, skipping on (`fig_energy.png`):
   overestimate.
 - Attributing all the device static to the inference assumes the PL would otherwise be
   off; if it stays powered anyway, only the dynamic column counts.
+
+## Final design (PR #2 @ `a50c1b2`) and the KR260 bitstream
+
+Hank merged all three proposed changes into #2: the single register bank, the BRAM
+output register, and the overlapped `pw_stage`. He also deepened `s_dw` from 8 to 16.
+Measured on his branch (rows `dsc_top_final`; `kr260_full_system` in
+`timing_results.csv`):
+
+- **Correctness:** co-sim passes, bit-exact on all 43 calls.
+- **Stride 1:** cycle-for-cycle identical to the experiment above (3.72× with all
+  weights zero, 93% of ideal).
+- **Timing:** `dsc_top` post-route **4.329 ns (~231 MHz)**. 3,698 LUT / 5,292 FF / 19 DSP /
+  30 BRAM18. Estimated power 101 mW dynamic + 289 mW PL static.
+
+**Stride 2 with `s_dw` depth 16** (vs depth 8, same tests):
+
+| Stride 2 | depth 8 | depth 16 | change | speedup now |
+|---|---|---|---|---|
+| dense | 18,880 | 18,061 | −4.3% | 1.00× |
+| 30% blocks pruned | 15,380 | 13,581 | −11.7% | 1.33× |
+| 50% | 13,126 | 11,201 | −14.7% | 1.61× |
+| 90% / all zero | 9,843 / 9,801 | 9,843 / 9,801 | 0 | 1.83× / 1.84× |
+
+- The 90% speedup *ratio* went down (1.92× → 1.83×) only because the dense baseline got
+  faster; the high-sparsity cycle counts are unchanged.
+- Hank's cycle model predicted no change for dense and −5% at 30%, so it needs
+  recalibrating before it's quoted.
+
+**KR260 bitstream** (`board/vivado/build_bd.tcl`, PR #4; PS + SmartConnects + `dsc_top`,
+KR260 board preset):
+
+- **Timing:** all constraints met at 200 MHz, WNS **+0.677 ns** (~231 MHz).
+- **Utilization:** 5,056 LUTs (4.3%), 7,069 FFs (3.0%), 15 BRAM tiles (10.4%).
+- **Register map** (one bank, from the generated `xdsc_top_hw.h`): `in` 0x10,
+  `params` 0x1c, `out` 0x28, `stride` 0x34, `skip_en` 0x3c, `sched_len` 0x44 (valid
+  0x48). It matches `board/sw/dsc_regs.h`'s static_asserts.
+
+**Next is on-board measurement:** latency, FPS and energy with the INA260.

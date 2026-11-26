@@ -5,3 +5,4 @@ design,variant,total_w,dynamic_w,device_static_w,clocks_w,clb_logic_w,signals_w,
 pointwise_skip_pipe_top,baseline,0.307,0.019,0.288,0.004,0.004,0.004,0.000,0.006
 dsc_top,baseline,0.385,0.096,0.289,0.026,0.024,0.013,0.030,0.004
 dsc_top,bram_lat2+overlap,0.389,0.100,0.289,0.027,0.024,0.014,0.030,0.004
+dsc_top,final_a50c1b2,0.389,0.101,0.289,0.027,0.025,0.015,0.030,0.005
