@@ -1,0 +1,13 @@
+# Timing and resources, part xck26-sfvc784-2LV-c, 5.000 ns (200 MHz) constraint, Vitis HLS / Vivado 2024.2.
+# hls_est_ns: HLS csynth estimate. post_synth_ns / post_route_ns: Vivado, out-of-context (export_design -flow impl).
+# fmax_mhz = 1000 / post_route_ns. Resources are post-route.
+# dsc_top = Hank's fused block, PR #2 @ ecf8a64 (variant 'bram_lat2' = + BIND_STORAGE pw_wt latency=2, experiment only).
+# dsc_top final_a50c1b2 = PR #2 as merged by Hank. kr260_full_system = board/vivado/build_bd.tcl bitstream (PS + SmartConnects + dsc_top), WNS +0.677 ns at 200 MHz; bram18 = 15 tiles x 2.
+design,variant,hls_est_ns,post_synth_ns,post_route_ns,fmax_mhz,timing_met_200,lut,ff,dsp,bram18,srl,clb
+pointwise_skip_top,baseline,3.644,3.408,4.260,234.7,yes,557,607,8,0,15,132
+dsc_top,baseline,3.650,5.087,5.536,180.6,no,3662,5162,17,30,626,946
+dsc_top,bram_lat2,3.650,3.426,4.243,235.7,yes,3639,5212,17,30,632,951
+pointwise_skip_pipe_top,baseline,3.644,3.408,4.194,238.4,yes,663,576,10,0,,
+dsc_top,bram_lat2+overlap,3.650,3.426,4.280,233.6,yes,3704,5330,19,30,632,943
+dsc_top,final_a50c1b2,3.650,3.426,4.329,231.0,yes,3698,5292,19,30,632,1001
+kr260_full_system,bitstream_a50c1b2,,,4.323,231.3,yes,5056,7069,,30,,
