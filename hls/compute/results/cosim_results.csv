@@ -1,5 +1,5 @@
 # Measured C/RTL co-simulation cycle counts, Vitis HLS 2024.2, part xck26-sfvc784-2LV-c, 200 MHz target.
-# kernel: pointwise_skip_top = standalone pointwise + skip (hls/compute), dsc_top = fused DW->PW streaming block (hls/top, PR #2 @ ecf8a64)
+# kernel: pointwise_skip_top = standalone pointwise + skip (hls/compute), dsc_top = fused DW->PW streaming block (hls/top, PR #2 @ ecf8a64), dsc_top_final = PR #2 @ a50c1b2 (one register bank, BRAM fix, overlapped pw_stage, s_dw depth 16)
 # Layer: 32 -> 64 channels; stride 1 = 16x16 output pixels, stride 2 = 8x8.
 # sched_len = pointwise cycles per pixel (256 dense). cycles_* = whole-call latency from the co-sim transaction report.
 kernel,stride,case,block_prune_pct,sched_len,cycles_skip_on,cycles_bypass
@@ -47,3 +47,15 @@ dsc_top+bram_lat2+overlap,2,50% blocks pruned,50,141,13126,18880
 dsc_top+bram_lat2+overlap,2,90% blocks pruned,90,68,9843,18880
 dsc_top+bram_lat2+overlap,2,all weights zero,100,64,9801,18880
 dsc_top+bram_lat2+overlap,2,50% unstructured zeros,0,255,18831,18880
+dsc_top_final,1,dense,0,256,67232,67208
+dsc_top_final,1,30% blocks pruned,30,166,44171,67208
+dsc_top_final,1,50% blocks pruned,50,142,38025,67208
+dsc_top_final,1,90% blocks pruned,90,67,18824,67208
+dsc_top_final,1,all weights zero,100,64,18061,67208
+dsc_top_final,1,50% unstructured zeros,0,256,67208,67208
+dsc_top_final,2,dense,0,256,18066,18061
+dsc_top_final,2,30% blocks pruned,30,186,13581,18061
+dsc_top_final,2,50% blocks pruned,50,141,11201,18061
+dsc_top_final,2,90% blocks pruned,90,68,9843,18061
+dsc_top_final,2,all weights zero,100,64,9801,18061
+dsc_top_final,2,50% unstructured zeros,0,255,17998,18061

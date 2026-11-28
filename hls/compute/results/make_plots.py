@@ -23,10 +23,10 @@ SURFACE, TEXT, TEXT2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 SERIES = [
     # (kernel, stride, label, color, marker)
     ("pointwise_skip_top",      1, "Pointwise only, stride 1",            "#2a78d6", "o"),
-    ("dsc_top",                 1, "Fused DW→PW block, stride 1",          "#eb6834", "s"),
-    ("dsc_top",                 2, "Fused DW→PW block, stride 2",          "#1baf7a", "^"),
+    ("dsc_top",                 1, "Fused block as first built, stride 1", "#eb6834", "s"),
+    ("dsc_top_final",           2, "Fused block final, stride 2",          "#1baf7a", "^"),
     ("pointwise_skip_pipe_top", 1, "Pointwise, overlapped load (proto.)",  "#6250d6", "D"),
-    ("dsc_top+bram_lat2+overlap", 1, "Fused block + overlapped load (exp.)", "#e87ba4", "P"),
+    ("dsc_top_final",           1, "Fused block final (overlapped load)",  "#e87ba4", "P"),
 ]
 
 
@@ -71,7 +71,7 @@ def fig_speedup(rows):
     cut above the convex ideal curve and misread as better-than-ideal)."""
     panels = [
         ("Standalone pointwise kernel (stride 1)", ["pointwise_skip_top", "pointwise_skip_pipe_top"]),
-        ("Fused DW→PW block (dsc_top)", ["dsc_top", "dsc_top+bram_lat2+overlap"]),
+        ("Fused DW→PW block (dsc_top)", ["dsc_top", "dsc_top_final"]),
     ]
     fig, axes = plt.subplots(1, 2, figsize=(10.0, 4.4), dpi=200, sharey=True)
     fig.patch.set_facecolor(SURFACE)
@@ -189,8 +189,8 @@ def fig_energy(rows):
     with open(os.path.join(HERE, "power_results.csv")) as f:
         for r in csv.DictReader(line for line in f if not line.startswith("#")):
             pw[(r["design"], r["variant"])] = (float(r["dynamic_w"]), float(r["device_static_w"]))
-    dyn_w, stat_w = pw[("dsc_top", "bram_lat2+overlap")]
-    data = sorted((r for r in rows if r["kernel"] == "dsc_top+bram_lat2+overlap" and r["stride"] == 1
+    dyn_w, stat_w = pw[("dsc_top", "final_a50c1b2")]
+    data = sorted((r for r in rows if r["kernel"] == "dsc_top_final" and r["stride"] == 1
                    and not r["case"].startswith("50% unstructured")), key=lambda r: r["block_prune_pct"])
     labels = ["dense" if r["block_prune_pct"] == 0 else
               ("all zero" if r["block_prune_pct"] == 100 else f"{r['block_prune_pct']}%") for r in data]
