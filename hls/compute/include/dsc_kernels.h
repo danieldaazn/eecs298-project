@@ -49,6 +49,24 @@ struct pw_sched_t {
     bool    last;    // last entry of channel k: requantize and write out[k]
 };
 
+// Build the per-layer skip schedule from the dense weights (steps 1-2 in
+// src/pointwise_skip.cpp). n = schedule length = pipeline cycles per pixel.
+// Shared by pointwise_skip_top and the streaming top-level (hls/top/).
+void pw_build_sched(const wgt_t wt[PW_C_OUT][PW_C_IN],
+                    bool skip_en,
+                    pw_sched_t sched[PW_C_OUT * PW_CBLKS],
+                    int &n);
+
+// Run one schedule entry for the pixel whose input channels are `vec`. acc carries
+// the running sum between entries. Returns true on a channel's last entry; `o` is
+// then the finished output activation for channel e.k.
+bool pw_sched_step(const pw_sched_t &e,
+                   const act_t vec[PW_C_IN],
+                   const wgt_t wt[PW_C_OUT][PW_C_IN],
+                   const acc_t bias[PW_C_OUT],
+                   acc_t &acc,
+                   act_t &o);
+
 // Pointwise with zero-block skipping. skip_en = 0 runs every block (dense; the
 // benchmarking bypass). sched_len returns the schedule length = pipeline cycles per
 // pixel; the dense schedule is PW_C_OUT * PW_CBLKS.

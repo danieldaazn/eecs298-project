@@ -26,19 +26,11 @@
 
 #include "dsc_kernels.h"
 
-void pointwise_skip_top(const act_t in[PW_C_IN][PW_H][PW_W],
-                        const wgt_t wt[PW_C_OUT][PW_C_IN],
-                        const acc_t bias[PW_C_OUT],
-                        int h, int w,
-                        bool skip_en,
-                        act_t out[PW_C_OUT][PW_H][PW_W],
-                        int &sched_len) {
-    // Standalone C-sim / csynth-estimate wrapper; see dsc_kernels.h.
-#pragma HLS ARRAY_PARTITION variable=wt cyclic factor=PW_UNROLL dim=2
-    // Input partitioned like the weights: PW_UNROLL channels readable per cycle, so
-    // gathering a pixel's channel vector takes PW_CBLKS cycles, not PW_C_IN.
-#pragma HLS ARRAY_PARTITION variable=in cyclic factor=PW_UNROLL dim=1
-
+void pw_build_sched(const wgt_t wt[PW_C_OUT][PW_C_IN],
+                    bool skip_en,
+                    pw_sched_t sched[PW_C_OUT * PW_CBLKS],
+                    int &n) {
+#pragma HLS INLINE
     // ---- 1. per-output-channel nonzero-block masks (once per layer) -------------
     ap_blk_mask_t mask[PW_C_OUT];
 PW_SK_MASK:
@@ -62,8 +54,7 @@ PW_SK_MASK:
     }
 
     // ---- 2. schedule of (k, cb) entries ------------------------------------------
-    pw_sched_t sched[PW_C_OUT * PW_CBLKS];
-    int n = 0;
+    int cnt = 0;
 PW_SK_SCHED:
     for (int i = 0; i < PW_C_OUT * PW_CBLKS; i++) {
 #pragma HLS PIPELINE II=1
@@ -79,10 +70,44 @@ PW_SK_SCHED:
             e.mac_en = bit;
             e.first  = empty || (m & ((1u << cb) - 1u)) == 0;   // no lower nonzero block
             e.last   = empty || (m >> (cb + 1)) == 0;           // no higher nonzero block
-            sched[n] = e;
-            n++;
+            sched[cnt] = e;
+            cnt++;
         }
     }
+    n = cnt;
+}
+
+bool pw_sched_step(const pw_sched_t &e,
+                   const act_t vec[PW_C_IN],
+                   const wgt_t wt[PW_C_OUT][PW_C_IN],
+                   const acc_t bias[PW_C_OUT],
+                   acc_t &acc,
+                   act_t &o) {
+#pragma HLS INLINE
+    const acc_t base = e.first ? bias[e.k] : acc;
+    const acc_t part = e.mac_en ? pw_partial_sum(vec, wt[e.k], e.cb) : (acc_t)0;
+    acc = base + part;
+    o = requant_relu6(acc);
+    return e.last;
+}
+
+void pointwise_skip_top(const act_t in[PW_C_IN][PW_H][PW_W],
+                        const wgt_t wt[PW_C_OUT][PW_C_IN],
+                        const acc_t bias[PW_C_OUT],
+                        int h, int w,
+                        bool skip_en,
+                        act_t out[PW_C_OUT][PW_H][PW_W],
+                        int &sched_len) {
+    // Standalone C-sim / csynth-estimate wrapper; see dsc_kernels.h.
+#pragma HLS ARRAY_PARTITION variable=wt cyclic factor=PW_UNROLL dim=2
+    // Input partitioned like the weights: PW_UNROLL channels readable per cycle, so
+    // gathering a pixel's channel vector takes PW_CBLKS cycles, not PW_C_IN.
+#pragma HLS ARRAY_PARTITION variable=in cyclic factor=PW_UNROLL dim=1
+
+    // ---- 1-2. mask + schedule (once per layer) -----------------------------------
+    pw_sched_t sched[PW_C_OUT * PW_CBLKS];
+    int n;
+    pw_build_sched(wt, skip_en, sched, n);
     sched_len = n;
 
     // ---- 3. run the schedule for every pixel -------------------------------------
@@ -111,11 +136,9 @@ PW_SK_ROWS:
 #pragma HLS PIPELINE II=1
 #pragma HLS LOOP_TRIPCOUNT min=64 max=256
                 const pw_sched_t e = sched[i];
-                const acc_t base = e.first ? bias[e.k] : acc;
-                const acc_t part = e.mac_en ? pw_partial_sum(vec, wt[e.k], e.cb) : (acc_t)0;
-                acc = base + part;
-                if (e.last)
-                    out[e.k][y][x] = requant_relu6(acc);
+                act_t o;
+                if (pw_sched_step(e, vec, wt, bias, acc, o))
+                    out[e.k][y][x] = o;
             }
         }
     }
