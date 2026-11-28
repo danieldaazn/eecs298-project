@@ -1,0 +1,64 @@
+{
+ "classes": [
+  "airplane",
+  "automobile",
+  "bird",
+  "cat",
+  "deer",
+  "dog",
+  "frog",
+  "horse",
+  "ship",
+  "truck"
+ ],
+ "levels": [
+  {
+   "level": 0,
+   "gpu_test_acc": 0.7215,
+   "sched_len": {
+    "b1": 256,
+    "b2": 256
+   },
+   "pw_block_sparsity": {
+    "b1": 0.0,
+    "b2": 0.0
+   }
+  },
+  {
+   "level": 50,
+   "gpu_test_acc": 0.7026,
+   "sched_len": {
+    "b1": 132,
+    "b2": 130
+   },
+   "pw_block_sparsity": {
+    "b1": 0.5,
+    "b2": 0.5
+   }
+  },
+  {
+   "level": 75,
+   "gpu_test_acc": 0.6725,
+   "sched_len": {
+    "b1": 85,
+    "b2": 80
+   },
+   "pw_block_sparsity": {
+    "b1": 0.75,
+    "b2": 0.75
+   }
+  },
+  {
+   "level": 90,
+   "gpu_test_acc": 0.6298,
+   "sched_len": {
+    "b1": 68,
+    "b2": 68
+   },
+   "pw_block_sparsity": {
+    "b1": 0.8984375,
+    "b2": 0.8984375
+   }
+  }
+ ]
+}

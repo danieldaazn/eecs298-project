@@ -1,0 +1,26 @@
+dense training, 40 epochs
+  epoch   5/40  loss 1.495  test acc 0.4825
+  epoch  10/40  loss 1.287  test acc 0.6280
+  epoch  15/40  loss 1.195  test acc 0.6457
+  epoch  20/40  loss 1.245  test acc 0.6840
+  epoch  25/40  loss 1.068  test acc 0.6910
+  epoch  30/40  loss 1.288  test acc 0.6992
+  epoch  35/40  loss 1.151  test acc 0.7197
+  epoch  40/40  loss 1.229  test acc 0.7215
+level 0%: test acc 0.7215, sched_len {'b1': 256, 'b2': 256}, integer-reference mismatches on 200 images: 0
+50% PW blocks pruned, fine-tuning 15 epochs
+  epoch   5/15  loss 1.228  test acc 0.6896
+  epoch  10/15  loss 1.098  test acc 0.6977
+  epoch  15/15  loss 1.071  test acc 0.7026
+level 50%: test acc 0.7026, sched_len {'b1': 132, 'b2': 130}, integer-reference mismatches on 200 images: 0
+75% PW blocks pruned, fine-tuning 15 epochs
+  epoch   5/15  loss 1.186  test acc 0.6421
+  epoch  10/15  loss 1.203  test acc 0.6611
+  epoch  15/15  loss 1.233  test acc 0.6725
+level 75%: test acc 0.6725, sched_len {'b1': 85, 'b2': 80}, integer-reference mismatches on 200 images: 0
+90% PW blocks pruned, fine-tuning 15 epochs
+  epoch   5/15  loss 1.328  test acc 0.5810
+  epoch  10/15  loss 1.368  test acc 0.6242
+  epoch  15/15  loss 1.385  test acc 0.6298
+level 90%: test acc 0.6298, sched_len {'b1': 68, 'b2': 68}, integer-reference mismatches on 200 images: 0
+done

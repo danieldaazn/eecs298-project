@@ -1,0 +1,6 @@
+format_version 1
+stride 1
+c 32
+h 16
+w 16
+c_out 64
