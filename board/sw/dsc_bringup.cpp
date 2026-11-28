@@ -53,6 +53,17 @@ static void die(const char *what) {
     exit(2);
 }
 
+// Full-system barrier between CPU writes to the DMA buffers and the START write (and
+// between ap_done and reading results). __sync_synchronize() is only `dmb ish` on
+// arm64, which doesn't order accesses as seen by a device; `dsb sy` does.
+static inline void io_barrier() {
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy" ::: "memory");
+#else
+    __sync_synchronize();
+#endif
+}
+
 static double now_us() {
     timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -184,7 +195,7 @@ static bool run_once(const Dev &d, int stride, bool skip_en, int &sched_len, dou
         const uint32_t unmask = 1;
         if (write(d.uio_fd, &unmask, 4) != 4) die("uio unmask");
     }
-    __sync_synchronize();                                // buffers written before start
+    io_barrier();                                        // buffers written before start
 
     const double t0 = now_us();
     d.wr(DSC_AP_CTRL, DSC_CTRL_START);
@@ -199,7 +210,7 @@ static bool run_once(const Dev &d, int stride, bool skip_en, int &sched_len, dou
             if (i > 50000000) { fprintf(stderr, "ap_done never set\n"); return false; }
     }
     us = now_us() - t0;
-    __sync_synchronize();
+    io_barrier();
     sched_len = (int)d.rd(DSC_SCHED_LEN);
     return true;
 }

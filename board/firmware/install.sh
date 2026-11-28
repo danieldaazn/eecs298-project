@@ -50,9 +50,25 @@ if ! grep -q "of_id=generic-uio" /proc/cmdline; then
     modprobe uio_pdrv_genirq of_id=generic-uio 2>/dev/null || echo "note: uio_pdrv_genirq not available"
 fi
 
-# Only one app can be loaded; unloadapp fails harmlessly if none is.
-xmutil unloadapp >/dev/null 2>&1 || true
-xmutil loadapp $APP
+# Only one app can be loaded; unloadapp fails harmlessly if none is. At boot, dfx-mgr may
+# still be loading its default app, so retry until our accelerator's UIO node exists.
+has_uio() {
+    for d in /sys/class/uio/uio*; do
+        [ -e "$d/name" ] && [ "$(cat "$d/name")" = "dsc_top" ] && return 0
+    done
+    return 1
+}
+tries=0
+until has_uio; do
+    tries=$((tries + 1))
+    if [ $tries -gt 5 ]; then
+        echo "dsc_accel did not load after 5 attempts (see dmesg, xmutil listapps)"
+        exit 1
+    fi
+    xmutil unloadapp >/dev/null 2>&1 || true
+    xmutil loadapp $APP || true
+    has_uio || sleep 2
+done
 xmutil listapps
 
 for d in /sys/class/uio/uio*; do
