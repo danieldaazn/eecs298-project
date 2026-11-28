@@ -13,7 +13,7 @@ kernel; joint Hank/Daniel interface).
 | C-sim, `ap_int` types | **Passes**, all three suites, using Xilinx's open-source [`ap_int` headers](https://github.com/Xilinx/HLS_arbitrary_Precision_Types) with g++ (no Vitis) |
 | Mutation checks | Broken row shift, stride parity, byte lanes, burst address, short read, bias/weight decode, output packing, `skip_en` ignored, missing stride clamp, and (overlapped `pw_stage`) no buffer swap, prefetch into the live half, prefetch past the last pixel, wrong prefetch beat — all caught |
 | csynth / co-sim / IP export | **Pass** (Daniel, Vitis HLS 2024.2, `xck26-sfvc784-2LV-c`, at `ecf8a64`): every pipelined loop at its target II, co-sim bit-exact on all 43 calls |
-| Post-route timing | `ecf8a64`: 5.54 ns (~181 MHz), **misses 200 MHz**. With Daniel's BRAM output-register fix + overlapped `pw_stage` (both now in): **4.28 ns, ~234 MHz, met**, co-sim bit-exact (Daniel, on a scratch copy; re-run on this branch to confirm) |
+| Post-route timing | `ecf8a64`: 5.54 ns (~181 MHz), **misses 200 MHz**. This branch (`a50c1b2`, BRAM output register + overlapped `pw_stage` + `s_dw` 16): **4.329 ns, ~231 MHz, met**; co-sim bit-exact on all 43 calls (Daniel, 2026-11-26) |
 | Resources (post-route) | 3,704 LUT / 5,330 FF / 19 DSP / 30 BRAM18 (~3 % / 2 % / 2 % / 10 % of the K26) |
 | Board | Week 9 flow: see "Week 9" below |
 
@@ -82,30 +82,31 @@ Per call, with the placeholder layer (16×16, 32→64 channels):
 - Fixed per call: ~1.7k cycles measured (parameter load + schedule build, then
   pipeline fill, since the first window needs a row and a half of input, and drain).
 
-Measured (Daniel's co-sim of the current design, BRAM fix + overlapped load, `s_dw`
-depth 8; `hls/compute/results/cosim_results.csv`):
+Measured (Daniel's co-sim of this branch, `a50c1b2`, rows `dsc_top_final` in
+`hls/compute/results/cosim_results.csv`; stride 2 also shown at the old `s_dw` depth 8):
 
-| sched_len (pruned) | Stride 1 cycles | speedup | Stride 2 cycles | speedup | stride-2 bound |
-|---|---|---|---|---|---|
-| 256 (dense) | 67,208 | 1.00× | 18,880 | 1.00× | pointwise |
-| 166 / 186 (30 %) | 44,171 | 1.52× | 15,380 | 1.23× | pointwise, starved |
-| 142 / 141 (50 %) | 38,025 | 1.77× | 13,126 | 1.44× | pointwise, starved |
-| 67 / 68 (90 %) | 18,824 | 3.57× | 9,843 | 1.92× | line buffer |
-| 64 (all zero) | 18,061 | 3.72× | 9,801 | 1.93× | line buffer |
+| sched_len (pruned) | Stride 1 cycles | speedup | Stride 2, `s_dw` 8 | Stride 2, `s_dw` 16 | speedup | stride-2 bound |
+|---|---|---|---|---|---|---|
+| 256 (dense) | 67,208 | 1.00× | 18,880 | **18,061** | 1.00× | pointwise |
+| 166 / 186 (30 %) | 44,171 | 1.52× | 15,380 | **13,581** | 1.33× | pointwise |
+| 142 / 141 (50 %) | 38,025 | 1.77× | 13,126 | **11,201** | 1.61× | pointwise / line buffer |
+| 67 / 68 (90 %) | 18,824 | 3.57× | 9,843 | 9,843 | 1.83× | line buffer |
+| 64 (all zero) | 18,061 | 3.72× | 9,801 | 9,801 | 1.84× | line buffer |
 
 **Stride 1 is exactly `256·sched_len + 1,672` cycles** (±5 at every sparsity level):
 pointwise-bound, no per-pixel overhead left, and a fixed ~1.7k per call (parameter
 load + schedule build ~1k, pipeline fill/drain).
 
-**Stride-2 FIFO finding (Week 8).** `hls/memory/tools/dataflow_model.py` is a
-cycle-level model of the dataflow region. It reproduces the stride-1 co-sim to within
-5 cycles. At stride 2 it shows mid-sparsity layers losing time that neither pointwise
-nor the line buffer accounts for: `window_gen` emits windows only on every other input
-row, and during each window-less row (~544 cycles) pointwise drains the 2 pixels in
-`s_dw` and then idles. **`s_dw` is now 16 deep (4 pixels).** The model predicts −5 %
-(30 %) and −13 % (50 %) cycles at stride 2, no change elsewhere. Cost: 8 more 64-bit
-FIFO entries (SRL, a few LUTs). To confirm in co-sim (Daniel), along with the rest of
-this branch. Deeper buys nothing more in the model.
+**Stride-2 FIFO finding (Week 8), confirmed in co-sim.** At stride 2, `window_gen`
+emits windows only on every other input row. During each window-less row, pointwise
+drains the 2 pixels a depth-8 `s_dw` holds and then idles. **`s_dw` is now 16 deep
+(4 pixels).** Measured: −4.3 % (dense), −11.7 % (30 %), −14.7 % (50 %) stride-2 cycles,
+no change at stride 1 or at 90 %+. Stride-2 dense is now exactly pointwise-bound
+(18,061 = 64·256 + ~1.7k). Cost: 8 more 64-bit FIFO entries (SRL, a few LUTs).
+`hls/memory/tools/dataflow_model.py` found the effect but underestimated it at dense
+and 30 % (it predicted 0 and −5 %). It matches stride 1 to within 5 cycles, but at
+stride 2 it misses some stall in the window path, so **don't quote its stride-2
+numbers**; the co-sim table above supersedes them.
 
 **Finding: at stride 2 the line buffer caps the skip speedup at ~1.9×.** The window
 generator walks every input pixel at one channel per cycle, but stride 2 has 4× fewer
@@ -200,9 +201,8 @@ All scalars and the three buffer addresses are `s_axilite` registers in bundle
 `control`, plus `ap_ctrl_hs` (start/done/idle + interrupt). **Kevin: take register
 offsets from the generated `xdsc_top_hw.h` after csynth, don't hand-code them.**
 
-Expected map after the one-bank change. This is **predicted** from Vitis's usual
-allocation (the old `control_r` used exactly these address offsets); confirm against
-the regenerated header:
+Final map (one bank). Generated by Vitis at `a50c1b2` and committed as
+`board/sw/xdsc_top_hw.h` in #4, where `board/sw/dsc_regs.h` checks it at compile time:
 
 | Offset | Register |
 |---|---|
@@ -253,13 +253,11 @@ numbers, it should be small at stride 1, and show the line-buffer ceiling at str
 4. `load_params` at the predicted IIs; `PW_SK_MASK` at II=2.
 5. Co-sim pass (43 calls), IP export pass.
 
-## Still to confirm on this branch
+## Confirmed on this branch (Daniel, 2026-11-26, `a50c1b2`)
 
-Of the changes since `ecf8a64`, three (one AXI-Lite bank, BRAM `latency=2`,
-overlapped `pw_stage`) were run by Daniel on a scratch copy; the `s_dw` depth change is
-new and model-only. One
-`run_hls_win.bat cosim export impl` on this branch confirms them as merged, and
-regenerates `xdsc_top_hw.h` for the register map above.
+`run_hls_win.bat cosim export impl`: co-sim bit-exact on all 43 calls, every pipelined
+loop at II=1, post-route 4.329 ns, register map as above. The full KR260 bitstream
+(PR #4) meets 200 MHz with WNS +0.677 ns.
 
 ## Open items for the team
 
@@ -267,7 +265,6 @@ regenerates `xdsc_top_hw.h` for the register map above.
   blob (`hls/top/include/dsc_pack.h` is the C implementation of the exact byte layout,
   shared by the testbench and the board bring-up); tell us the test-image sizes and
   whether the model has stride-2 blocks at high sparsity (line-buffer ceiling).
-- **Daniel:** one Vitis run on this branch (above).
 - **All:** the kernel runs **one fixed layer shape** (compile-time `DW_H/W/C`,
   `PW_C_OUT`). A real MobileNet has many shapes, so we need to pick between runtime
   dimensions with compile-time maxima (my preference: one bitstream, and the line
