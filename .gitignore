@@ -10,3 +10,7 @@ board/firmware/out/
 board/sw/dsc_bringup
 board/sw/dsc_bringup_hostsim
 *.jou
+# Demo: built library, generated test set, server caches
+demo/board/libdsc.so
+demo/model/export/test_images.npz
+__pycache__/

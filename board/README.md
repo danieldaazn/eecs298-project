@@ -81,7 +81,17 @@ The script stops before writing these if timing fails (WNS < 0).
    sudo insmod u-dma-buf.ko udmabuf0=1048576
    ls /dev/udmabuf0 /sys/class/u-dma-buf/udmabuf0/phys_addr
    ```
-   The `insmod` doesn't survive a reboot; rerun it after each boot.
+   To load it at every boot instead (done on our board):
+   ```sh
+   sudo mkdir -p /lib/modules/$(uname -r)/extra && sudo cp u-dma-buf.ko /lib/modules/$(uname -r)/extra/
+   sudo depmod -a
+   echo u_dma_buf | sudo tee /etc/modules-load.d/u-dma-buf.conf
+   echo "options u_dma_buf udmabuf0=4194304" | sudo tee /etc/modprobe.d/u-dma-buf.conf
+   sudo modprobe u_dma_buf
+   ```
+   The module's name is `u_dma_buf`, with underscores. An `options u-dma-buf ...` line
+   is silently ignored, and you get the module but no `/dev/udmabuf0`. Don't confuse it
+   with the kernel's own `/dev/udmabuf` (no 0), which is a different driver.
 
 ## 4. Install and load the accelerator (board)
 
