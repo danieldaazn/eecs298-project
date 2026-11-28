@@ -211,14 +211,14 @@ function showTip(f, px, py, rows, title) {
   f.tip.style.left = Math.min(px + 12, f.W - tw) + 'px';
   f.tip.style.top = Math.max(0, py - 10) + 'px';
 }
-function lineChart(box, {xs, xFmt, series, yFmt, yMax, h = 230, endLabels = true, ticks}) {
+function lineChart(box, {xs, xFmt, series, yFmt, yMax, h = 230, endLabels = true, ticks, markers = true}) {
   const top = niceMax(yMax ?? Math.max(...series.flatMap(s => s.values.filter(v => v != null))));
   const f = frame(box, h, top, yFmt, xs, xFmt, ticks);
   for (const s of series) {
     const pts = s.values.map((v, i) => v == null ? null : [f.x(i), f.y(v)]).filter(Boolean);
     if (pts.length > 1) f.svg.append(el('polyline', {points: pts.map(p => p.join(',')).join(' '), fill: 'none',
       stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'}));
-    for (const p of pts) f.svg.append(el('circle', {cx: p[0], cy: p[1], r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2}));
+    for (const p of (markers ? pts : pts.slice(-1))) f.svg.append(el('circle', {cx: p[0], cy: p[1], r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2}));
     if (endLabels && s.label !== false && pts.length) {
       const last = pts[pts.length - 1], v = s.values[s.values.length - 1];
       f.svg.append(el('text', {x: last[0] + 10, y: last[1] + 4, class: 'lbl'}, `${yFmt(v, true)} ${s.short || ''}`));
@@ -346,7 +346,7 @@ async function refreshSensors() {
   const base = Math.floor(lo * 10) / 10, top = Math.max(base + 0.5, Math.ceil(hi * 10) / 10 + 0.1);
   lineChart(box, {xs: pts.map(p => p[0]), xFmt: t => `${Math.round(t)} s`,
     series: [{name: 'board power', color: css('--series-1'), values: vals.map(v => v - base)}],
-    yFmt: v => `${fmt(v + base, 2)} W`, yMax: top - base, h: 200, endLabels: true,
+    yFmt: v => `${fmt(v + base, 2)} W`, yMax: top - base, h: 200, endLabels: true, markers: false,
     ticks: [0, Math.floor(pts.length / 2), pts.length - 1]});
 }
 
