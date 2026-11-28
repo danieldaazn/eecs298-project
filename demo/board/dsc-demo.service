@@ -1,0 +1,19 @@
+# systemd unit for the demo dashboard (installed by demo/deploy.sh as
+# /etc/systemd/system/dsc-demo.service; REPO is substituted there).
+# At boot: swap the default k26-starter-kits app for dsc_accel (if its firmware is
+# installed; the "-" lets the dashboard come up in SIM mode if not), then serve :8080.
+[Unit]
+Description=EECS298 depthwise-separable accelerator demo (http://<board>:8080/)
+After=network-online.target dfx-mgr.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=REPO/demo/board
+ExecStartPre=-/bin/sh REPO/board/firmware/install.sh --reload
+ExecStart=/usr/bin/python3 REPO/demo/board/server.py --port 8080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KR260 depthwise-separable accelerator — live demo</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --page: #f9f9f9; --surface-1: #ffffff; --text-primary: #191919; --text-secondary: #666666;
+  --grid: #e7e7e7; --axis: #c2c2c2; --border: rgba(11,11,11,0.10);
+  --series-1: #257de0; --series-2: #f47230; --series-3: #00b894;
+  --good: #0aac23; --good-text: #006c10; --warning: #fbb315; --critical: #dc3c3d;
+  --wash: rgba(37,125,224,0.10);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --page: #0b0b0b; --surface-1: #191919; --text-primary: #efefef; --text-secondary: #9c9c9c;
+    --grid: #303030; --axis: #474747; --border: rgba(255,255,255,0.10);
+    --series-1: #338ced; --series-2: #e76624; --series-3: #00a888;
+    --good-text: #53c556; --wash: rgba(51,140,237,0.14);
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --page: #0b0b0b; --surface-1: #191919; --text-primary: #efefef; --text-secondary: #9c9c9c;
+  --grid: #303030; --axis: #474747; --border: rgba(255,255,255,0.10);
+  --series-1: #338ced; --series-2: #e76624; --series-3: #00a888;
+  --good-text: #53c556; --wash: rgba(51,140,237,0.14);
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.viz-root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--page);
+  color: var(--text-primary); min-height: 100vh; padding: 20px 28px 40px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.sub { color: var(--text-secondary); font-size: 13px; }
+header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+.seg button { border: 0; background: transparent; color: var(--text-primary); padding: 7px 12px; font: inherit;
+  font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--wash); font-weight: 600; }
+.btn { border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary); border-radius: 8px;
+  padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+.btn:disabled { opacity: .5; cursor: default; }
+label.ctl { font-size: 13px; color: var(--text-secondary); display: inline-flex; gap: 6px; align-items: center; }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.span-12 { grid-column: span 12; } .span-8 { grid-column: span 8; } .span-6 { grid-column: span 6; }
+.span-4 { grid-column: span 4; }
+@media (max-width: 1100px) { .span-8, .span-6, .span-4 { grid-column: span 12; } }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.tile .label { font-size: 12px; color: var(--text-secondary); }
+.tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; }
+.tile .note { font-size: 12px; color: var(--text-secondary); }
+.hero { font-size: 56px; font-weight: 600; line-height: 1; }
+.imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 12px; margin-top: 12px; }
+.img { text-align: center; font-size: 12px; }
+.img canvas { width: 96px; height: 96px; image-rendering: pixelated; border-radius: 6px; display: block; margin: 0 auto 6px; }
+.img .pred { font-weight: 600; font-size: 13px; }
+.ok { color: var(--good-text); } .bad { color: var(--critical); }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { font-size: 11px; fill: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.chart .lbl { fill: var(--text-primary); font-size: 12px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin: 6px 0 2px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key-line { width: 16px; height: 2px; border-radius: 1px; display: inline-block; }
+.key-rect { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none;
+  white-space: nowrap; z-index: 5; }
+.tip .row { display: flex; align-items: center; gap: 8px; }
+.tip b { font-variant-numeric: tabular-nums; }
+.tip .k { color: var(--text-secondary); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text-secondary); font-weight: 500; }
+.banner { border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; display: none;
+  border: 1px solid var(--critical); background: var(--surface-1); }
+.muted { color: var(--text-secondary); }
+.empty { color: var(--text-secondary); font-size: 13px; padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <div>
+      <h1>Depthwise-separable CNN accelerator with zero-skipping — AMD Kria KR260</h1>
+      <div class="sub">EECS 298 · Daniel Nguyen, Hank Li, Kevin Chhim · CIFAR-10 through two FPGA blocks, live on the board</div>
+    </div>
+    <span class="badge" id="mode-badge"><span class="dot" id="mode-dot"></span><span id="mode-text">…</span></span>
+    <span class="badge" title="Every FPGA output is compared byte-for-byte with the same block computed on the ARM CPU">
+      <span id="bx-icon">✓</span><span id="bx-text">bit-exact …</span></span>
+  </header>
+  <div class="banner" id="sim-banner">
+    <b>⚠ SIMULATED</b> — the FPGA bitstream is not loaded, so FPGA results are computed by the golden model on the
+    CPU and latencies come from the co-simulation cycle model. <span class="muted" id="mode-detail"></span>
+  </div>
+
+  <div class="filters">
+    <label class="ctl">PW blocks pruned <span class="seg" id="lv-seg"></span></label>
+    <label class="ctl">Zero-skipping <span class="seg" id="skip-seg">
+      <button data-v="1" aria-pressed="true">On</button><button data-v="0" aria-pressed="false">Off</button></span></label>
+    <button class="btn" id="go">Classify 6 images</button>
+    <label class="ctl"><input type="checkbox" id="auto"> Auto</label>
+    <span style="flex:1"></span>
+    <button class="btn" id="bench-btn">Run benchmark (~40 s)</button>
+    <span class="sub" id="bench-stage"></span>
+  </div>
+
+  <div class="grid">
+    <section class="card span-8">
+      <h2>Live classification</h2>
+      <div class="sub" id="pipe-sub">ARM stem → <b>FPGA block 1</b> (stride 1, 16×16×32 → 64) → ARM 1×1 → <b>FPGA block 2</b> (stride 2 → 8×8×64) → ARM classifier</div>
+      <div class="imgs" id="imgs"><div class="empty">Press “Classify”.</div></div>
+      <div class="tiles" id="live-tiles"></div>
+    </section>
+    <section class="card span-4">
+      <h2>FPGA vs one ARM core, same two blocks</h2>
+      <div class="sub" id="hero-sub">Accelerator latency vs plain C on one Cortex-A53, current setting</div>
+      <div style="margin-top:18px"><span class="hero" id="hero">–</span></div>
+      <div class="sub" id="hero-note" style="margin-top:6px"></div>
+      <div class="tiles" id="sensor-tiles"></div>
+    </section>
+
+    <section class="card span-6">
+      <h2>Speedup from zero-skipping</h2>
+      <div class="sub">Accelerator latency, skipping off ÷ on, same bitstream and weights (benchmark)</div>
+      <div class="legend" id="sp-legend"></div>
+      <div class="chart" id="sp-chart"></div>
+    </section>
+    <section class="card span-6">
+      <h2>Accuracy vs pruning</h2>
+      <div class="sub" id="acc-sub">CIFAR-10 test set, measured on the board through the full pipeline</div>
+      <div class="chart" id="acc-chart"></div>
+    </section>
+
+    <section class="card span-6">
+      <h2>Energy per inference</h2>
+      <div class="sub">Both FPGA blocks, skipping on: (board power while running − idle) × time per call (benchmark)</div>
+      <div class="chart" id="en-chart"></div>
+    </section>
+    <section class="card span-6">
+      <h2>Board power</h2>
+      <div class="sub">Whole SOM, INA260, last 2 minutes</div>
+      <div class="chart" id="pw-chart"></div>
+    </section>
+
+    <section class="card span-12">
+      <h2>Results table</h2>
+      <div class="sub" id="tbl-sub">From the last benchmark run and the on-board accuracy evaluation</div>
+      <div id="tbl" style="overflow-x:auto;margin-top:8px"><div class="empty">No benchmark yet.</div></div>
+    </section>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.querySelector('.viz-root')).getPropertyValue(n).trim();
+const SVG_TAGS = new Set(['svg', 'line', 'text', 'polyline', 'circle', 'rect', 'path', 'g']);
+const el = (tag, attrs = {}, text) => {
+  const e = SVG_TAGS.has(tag) ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+const fmt = (v, d = 1) => v == null || !isFinite(v) ? '–' : v.toLocaleString(undefined, {maximumFractionDigits: d, minimumFractionDigits: d});
+let state = {level: 0, skip: 1, status: null, levels: []};
+
+// ---- tiny SVG charts (2px lines, >=8px markers with surface ring, hairline grid) -----
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function frame(box, h, yMax, yFmt, xs, xFmt, ticks, band) {
+  box.replaceChildren();
+  const W = box.clientWidth || 500, H = h, m = {l: 44, r: 80, t: 10, b: 30};
+  const svg = el('svg', {viewBox: `0 0 ${W} ${H}`, height: H});
+  // band: categories centred in equal slots (columns); otherwise points span the axis (lines)
+  const x = band ? i => m.l + (i + 0.5) / xs.length * (W - m.l - m.r)
+                 : i => m.l + (xs.length === 1 ? 0.5 : i / (xs.length - 1)) * (W - m.l - m.r);
+  const y = v => H - m.b - (v / yMax) * (H - m.t - m.b);
+  for (let k = 0; k <= 4; k++) {
+    const v = yMax * k / 4;
+    svg.append(el('line', {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), stroke: k ? css('--grid') : css('--axis'), 'stroke-width': 1}));
+    svg.append(el('text', {x: m.l - 8, y: y(v) + 4, 'text-anchor': 'end'}, yFmt(v)));
+  }
+  xs.forEach((v, i) => { if (!ticks || ticks.includes(i)) svg.append(el('text', {x: x(i), y: H - 10, 'text-anchor': 'middle'}, xFmt(v))); });
+  const tip = el('div', {class: 'tip'});
+  box.append(svg, tip);
+  return {svg, tip, x, y, W, H, m};
+}
+function showTip(f, px, py, rows, title) {
+  f.tip.replaceChildren();
+  if (title) f.tip.append(el('div', {class: 'k'}, title));
+  for (const r of rows) {
+    const row = el('div', {class: 'row'});
+    if (r.color) { const k = el('span', {class: 'key-line'}); k.style.background = r.color; row.append(k); }
+    row.append(el('b', {}, r.value), el('span', {class: 'k'}, r.name));
+    f.tip.append(row);
+  }
+  f.tip.style.display = 'block';
+  const tw = f.tip.offsetWidth;
+  f.tip.style.left = Math.min(px + 12, f.W - tw) + 'px';
+  f.tip.style.top = Math.max(0, py - 10) + 'px';
+}
+function lineChart(box, {xs, xFmt, series, yFmt, yMax, h = 230, endLabels = true, ticks}) {
+  const top = niceMax(yMax ?? Math.max(...series.flatMap(s => s.values.filter(v => v != null))));
+  const f = frame(box, h, top, yFmt, xs, xFmt, ticks);
+  for (const s of series) {
+    const pts = s.values.map((v, i) => v == null ? null : [f.x(i), f.y(v)]).filter(Boolean);
+    if (pts.length > 1) f.svg.append(el('polyline', {points: pts.map(p => p.join(',')).join(' '), fill: 'none',
+      stroke: s.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round'}));
+    for (const p of pts) f.svg.append(el('circle', {cx: p[0], cy: p[1], r: 4, fill: s.color, stroke: css('--surface-1'), 'stroke-width': 2}));
+    if (endLabels && s.label !== false && pts.length) {
+      const last = pts[pts.length - 1], v = s.values[s.values.length - 1];
+      f.svg.append(el('text', {x: last[0] + 10, y: last[1] + 4, class: 'lbl'}, `${yFmt(v, true)} ${s.short || ''}`));
+    }
+  }
+  const cross = el('line', {y1: f.m.t, y2: f.H - f.m.b, stroke: css('--axis'), 'stroke-width': 1, visibility: 'hidden'});
+  f.svg.append(cross);
+  const hit = el('rect', {x: f.m.l - 10, y: 0, width: f.W - f.m.l - f.m.r + 20, height: f.H, fill: 'transparent'});
+  f.svg.append(hit);
+  hit.addEventListener('pointermove', ev => {
+    const r = f.svg.getBoundingClientRect(), px = (ev.clientX - r.left) * f.W / r.width;
+    let best = 0; xs.forEach((_, i) => { if (Math.abs(f.x(i) - px) < Math.abs(f.x(best) - px)) best = i; });
+    cross.setAttribute('x1', f.x(best)); cross.setAttribute('x2', f.x(best)); cross.setAttribute('visibility', 'visible');
+    showTip(f, f.x(best) * r.width / f.W, 10, series.map(s => ({color: s.color, name: s.name, value: yFmt(s.values[best], true)})), xFmt(xs[best]));
+  });
+  hit.addEventListener('pointerleave', () => { cross.setAttribute('visibility', 'hidden'); f.tip.style.display = 'none'; });
+}
+function columnChart(box, {cats, values, fmtV, color, ref, h = 230, yMax}) {
+  const top = niceMax(yMax ?? Math.max(...values.filter(v => v != null), ref ? ref.value : 0));
+  const f = frame(box, h, top, v => fmtV(v), cats, c => c, null, true);
+  const bw = Math.min(24, (f.W - f.m.l - f.m.r) / cats.length * 0.5);
+  values.forEach((v, i) => {
+    if (v == null) return;
+    const x0 = f.x(i) - bw / 2, y0 = f.y(v), y1 = f.y(0), r = Math.min(4, (y1 - y0) / 2);
+    const path = `M${x0},${y1} V${y0 + r} Q${x0},${y0} ${x0 + r},${y0} H${x0 + bw - r} Q${x0 + bw},${y0} ${x0 + bw},${y0 + r} V${y1} Z`;
+    const bar = el('path', {d: path, fill: color});
+    f.svg.append(bar, el('text', {x: f.x(i), y: y0 - 6, 'text-anchor': 'middle', class: 'lbl'}, fmtV(v, true)));
+    const hit = el('rect', {x: f.x(i) - bw, y: f.m.t, width: bw * 2, height: f.H - f.m.t - f.m.b, fill: 'transparent', tabindex: 0});
+    const on = () => { bar.setAttribute('opacity', 0.8); const r2 = f.svg.getBoundingClientRect();
+      showTip(f, f.x(i) * r2.width / f.W, y0 * r2.height / f.H, [{color, name: '', value: fmtV(v, true)}], cats[i]); };
+    const off = () => { bar.removeAttribute('opacity'); f.tip.style.display = 'none'; };
+    hit.addEventListener('pointermove', on); hit.addEventListener('focus', on);
+    hit.addEventListener('pointerleave', off); hit.addEventListener('blur', off);
+    f.svg.append(hit);
+  });
+  if (ref) {
+    f.svg.append(el('line', {x1: f.m.l, x2: f.W - f.m.r, y1: f.y(ref.value), y2: f.y(ref.value), stroke: css('--text-secondary'), 'stroke-width': 1}));
+    f.svg.append(el('text', {x: f.W - f.m.r + 6, y: f.y(ref.value) + 4, class: 'lbl'}, ref.label));
+  }
+}
+function legend(box, items) {
+  box.replaceChildren(...items.map(it => { const s = el('span'); const k = el('span', {class: it.rect ? 'key-rect' : 'key-line'});
+    k.style.background = it.color; s.append(k, document.createTextNode(it.name)); return s; }));
+}
+
+// ---- status, controls ----------------------------------------------------------------
+function tile(label, value, note) {
+  const t = el('div', {class: 'tile'});
+  t.append(el('div', {class: 'label'}, label), el('div', {class: 'value'}, value));
+  if (note) t.append(el('div', {class: 'note'}, note));
+  return t;
+}
+function setSeg(seg, v) { for (const b of seg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.v === String(v))); }
+
+async function refreshStatus() {
+  const s = await (await fetch('/api/status')).json();
+  state.status = s;
+  if (!state.levels.length) {
+    state.levels = s.levels.map(l => l.level);
+    const seg = $('lv-seg');
+    for (const lv of state.levels) { const b = el('button', {'data-v': lv}, `${lv}%`); b.dataset.v = lv;
+      b.onclick = () => { state.level = lv; setSeg(seg, lv); classify(); }; seg.append(b); }
+    setSeg(seg, state.level);
+  }
+  $('mode-dot').style.background = s.fpga ? css('--good') : css('--critical');
+  $('mode-text').textContent = s.fpga ? 'Running on the FPGA' : 'SIMULATED (no bitstream)';
+  $('mode-badge').title = s.mode;
+  $('sim-banner').style.display = s.fpga ? 'none' : 'block';
+  $('mode-detail').textContent = s.mode;
+  const bx = s.bitexact, allOk = bx.ok === bx.checked;
+  $('bx-icon').textContent = allOk ? '✓' : '✗';
+  $('bx-icon').className = allOk ? 'ok' : 'bad';
+  $('bx-text').textContent = `bit-exact vs CPU: ${bx.ok.toLocaleString()} / ${bx.checked.toLocaleString()} block outputs`;
+  $('bench-btn').disabled = s.bench_running;
+  $('bench-stage').textContent = s.bench_running ? `benchmark: ${s.bench_stage}…` :
+    (s.eval.running ? `measuring accuracy at ${s.eval.level}% pruned: ${s.eval.done}/${s.eval.total}` : '');
+  drawResults(s);
+}
+
+async function classify() {
+  if (state.busy) return; state.busy = true;
+  try {
+    const r = await fetch(`/api/classify?level=${state.level}&skip=${state.skip}&n=6`);
+    if (!r.ok) return;
+    const d = await r.json(), classes = state.status ? state.status.classes : [];
+    const box = $('imgs'); box.replaceChildren();
+    let fpga = 0, cpu = 0, arm = 0, n = 0, b1 = 0, b2 = 0;
+    for (const it of d.results) {
+      const c = el('canvas', {width: 32, height: 32}), ctx = c.getContext('2d'), img = ctx.createImageData(32, 32);
+      const raw = atob(it.img);
+      for (let p = 0; p < 1024; p++) { for (let k = 0; k < 3; k++) img.data[4 * p + k] = raw.charCodeAt(3 * p + k); img.data[4 * p + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
+      const ok = it.pred === it.label, card = el('div', {class: 'img'});
+      card.append(c, el('div', {class: 'pred'}, classes[it.pred] || it.pred));
+      card.append(el('div', {class: ok ? 'ok' : 'bad'}, ok ? '✓ correct' : `✗ is ${classes[it.label]}`));
+      card.append(el('div', {class: 'muted'}, `${Math.round(it.top3[0][1] * 100)}% confident`));
+      box.append(card);
+      b1 += it.b1.us; b2 += it.b2.us; fpga += it.b1.us + it.b2.us; cpu += it.b1.cpu_us + it.b2.cpu_us; arm += it.arm_us; n++;
+    }
+    const L = state.status.levels.find(l => l.level === state.level);
+    $('live-tiles').replaceChildren(
+      tile('FPGA block 1', `${fmt(b1 / n)} µs`, `stride 1 · ${state.skip ? L.sched_len.b1 : 256} cycles/pixel`),
+      tile('FPGA block 2', `${fmt(b2 / n)} µs`, `stride 2 · ${state.skip ? L.sched_len.b2 : 256} cycles/pixel`),
+      tile('Same blocks on 1 ARM core', `${fmt(cpu / n / 1000, 2)} ms`, 'plain C, -O3'),
+      tile('ARM layers (stem, 1×1, head)', `${fmt(arm / n / 1000, 2)} ms`, 'per image'));
+    $('hero').textContent = `${fmt(cpu / fpga, 1)}× faster`;
+    $('hero-sub').textContent = state.status.fpga ? 'Accelerator latency vs plain C on one Cortex-A53, current setting'
+      : 'SIMULATED: accelerator latency from the cycle model, vs plain C on this CPU';
+    $('hero-note').textContent = `${fmt(fpga / n)} µs on the FPGA vs ${fmt(cpu / n)} µs on ${state.status.fpga ? 'one A53 core' : 'this CPU'}, ${state.level}% pruned, skipping ${state.skip ? 'on' : 'off'}`;
+    await refreshStatus();
+  } finally { state.busy = false; }
+}
+
+async function refreshSensors() {
+  const s = await (await fetch('/api/sensors')).json();
+  $('sensor-tiles').replaceChildren(
+    tile('Board power', s.power_w == null ? '–' : `${fmt(s.power_w, 2)} W`, 'whole SOM (INA260)'),
+    tile('PL temperature', s.pl_temp_c == null ? '–' : `${fmt(s.pl_temp_c, 1)} °C`, 'AMS'),
+    tile('PS temperature', s.ps_temp_c == null ? '–' : `${fmt(s.ps_temp_c, 1)} °C`, 'AMS'));
+  const box = $('pw-chart');
+  if (!s.available || s.history.length < 2) { box.replaceChildren(el('div', {class: 'empty'}, 'No power sensor on this machine.')); return; }
+  const h = s.history, step = Math.max(1, Math.floor(h.length / 120)), pts = h.filter((_, i) => i % step === 0);
+  const vals = pts.map(p => p[1]), lo = Math.min(...vals), hi = Math.max(...vals);
+  // Power varies by a few hundred mW around ~4 W: plot it against its own band, labelled.
+  const base = Math.floor(lo * 10) / 10, top = Math.max(base + 0.5, Math.ceil(hi * 10) / 10 + 0.1);
+  lineChart(box, {xs: pts.map(p => p[0]), xFmt: t => `${Math.round(t)} s`,
+    series: [{name: 'board power', color: css('--series-1'), values: vals.map(v => v - base)}],
+    yFmt: v => `${fmt(v + base, 2)} W`, yMax: top - base, h: 200, endLabels: true,
+    ticks: [0, Math.floor(pts.length / 2), pts.length - 1]});
+}
+
+function drawResults(s) {
+  const b = s.bench, lv = s.levels.map(l => l.level), cats = lv.map(v => `${v}%`);
+  // accuracy (board if measured, else GPU-trained number, labelled)
+  const acc = s.levels.map(l => l.board_acc ? 100 * l.board_acc.correct / l.board_acc.n : null);
+  const anyBoard = acc.some(v => v != null);
+  $('acc-sub').textContent = anyBoard
+    ? `CIFAR-10 test images measured on the board through the full pipeline (${s.levels.map(l => l.board_acc ? l.board_acc.n : 0).join(' / ')} images)`
+    : 'Not measured on the board yet; showing training-time accuracy (same arithmetic)';
+  columnChart($('acc-chart'), {cats, values: anyBoard ? acc : s.levels.map(l => 100 * l.gpu_acc),
+    fmtV: (v, d) => `${fmt(v, d ? 1 : 0)}%`, color: css('--series-1'), yMax: 100});
+
+  if (!b) { for (const id of ['sp-chart', 'en-chart']) $(id).replaceChildren(el('div', {class: 'empty'}, 'Run the benchmark to fill this in.')); return; }
+  const rows = b.levels;
+  const ideal = rows.map(r => 256 / r.sched_len.b1);
+  const sp1 = rows.map(r => r.b1_dense_us / r.b1_skip_us), sp2 = rows.map(r => r.b2_dense_us / r.b2_skip_us);
+  const ser = [
+    {name: 'block 1, stride 1 (measured)', short: 'stride 1', color: css('--series-1'), values: sp1},
+    {name: 'block 2, stride 2 (measured)', short: 'stride 2', color: css('--series-2'), values: sp2},
+    {name: 'ideal for block 1 (256 ÷ cycles/pixel)', short: 'ideal', color: css('--series-3'), values: ideal, label: false}];
+  legend($('sp-legend'), ser);
+  lineChart($('sp-chart'), {xs: lv, xFmt: v => `${v}% pruned`, series: ser, yFmt: (v, d) => `${fmt(v, d ? 2 : 1)}×`});
+
+  const idle = b.idle_w;
+  const e = rows.map(r => r.b1_power && idle != null ? ((r.b1_power.busy_w - idle) * r.b1_power.call_us + (r.b2_power.busy_w - idle) * r.b2_power.call_us) : null);
+  const ecpu = b.cpu.b1 && idle != null ? (b.cpu.b1.busy_w - idle) * b.cpu.b1.call_us + (b.cpu.b2.busy_w - idle) * b.cpu.b2.call_us : null;
+  if (e.some(v => v != null)) columnChart($('en-chart'), {cats, values: e, fmtV: v => `${fmt(v, 0)} µJ`,
+    color: css('--series-1'), ref: ecpu != null ? {value: ecpu, label: `ARM core: ${fmt(ecpu, 0)} µJ`} : null});
+  else $('en-chart').replaceChildren(el('div', {class: 'empty'}, b.fpga ? 'No power sensor readings.' : 'Needs the real FPGA (simulated run).'));
+
+  // table
+  const t = el('table'), hd = el('tr');
+  for (const c of ['PW blocks pruned', 'cycles/pixel b1 / b2', 'block 1 skip on (µs)', 'block 1 off (µs)', 'block 2 on (µs)', 'block 2 off (µs)',
+                   'speedup b1 / b2', 'ideal b1', 'energy / inference (µJ)', 'accuracy (board)', 'accuracy (training)']) hd.append(el('th', {}, c));
+  t.append(hd);
+  rows.forEach((r, i) => {
+    const L = s.levels.find(l => l.level === r.level), tr = el('tr');
+    const cells = [`${r.level}%`, `${r.sched_len.b1} / ${r.sched_len.b2}`, fmt(r.b1_skip_us), fmt(r.b1_dense_us), fmt(r.b2_skip_us), fmt(r.b2_dense_us),
+      `${fmt(sp1[i], 2)}× / ${fmt(sp2[i], 2)}×`, `${fmt(ideal[i], 2)}×`, e[i] == null ? '–' : fmt(e[i], 0),
+      L && L.board_acc ? `${fmt(100 * L.board_acc.correct / L.board_acc.n, 2)}% (n=${L.board_acc.n})` : '–', L ? `${fmt(100 * L.gpu_acc, 2)}%` : '–'];
+    for (const c of cells) tr.append(el('td', {}, c));
+    t.append(tr);
+  });
+  const tr = el('tr');
+  for (const c of ['ARM core (dense C)', '256 / 256', fmt(b.cpu.b1 ? b.cpu.b1.call_us : null), '', fmt(b.cpu.b2 ? b.cpu.b2.call_us : null), '', '', '', ecpu == null ? '–' : fmt(ecpu, 0), '', '']) tr.append(el('td', {}, c));
+  t.append(tr);
+  $('tbl').replaceChildren(t);
+  $('tbl-sub').textContent = `Benchmark ${b.time}${b.fpga ? '' : ' (SIMULATED: latencies from the cycle model)'} · idle board power ${fmt(idle, 2)} W · ${b.mode}`;
+}
+
+$('skip-seg').querySelectorAll('button').forEach(btn => btn.onclick = () => { state.skip = +btn.dataset.v; setSeg($('skip-seg'), state.skip); classify(); });
+$('go').onclick = classify;
+$('bench-btn').onclick = async () => { await fetch('/api/bench', {method: 'POST'}); refreshStatus(); };
+setInterval(() => { if ($('auto').checked) classify(); }, 2500);
+setInterval(refreshStatus, 3000);
+setInterval(refreshSensors, 1000);
+window.addEventListener('resize', () => { if (state.status) drawResults(state.status); });
+refreshStatus().then(classify);
+refreshSensors();
+</script>
+</body>
+</html>
