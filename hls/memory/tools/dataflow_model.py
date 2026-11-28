@@ -11,7 +11,9 @@ schedule build, which is added as a constant FIXED fitted to Daniel's stride-1 c
 
 Use it for relative comparisons (FIFO depth A vs B). At stride 2 it under-predicts
 co-sim by up to ~1k cycles (unmodeled per-row pipeline latency), so absolute stride-2
-numbers come from co-sim, not from here.
+numbers come from co-sim, not from here. Even relative stride-2 changes are only
+directional: for s_dw 8 -> 16 it predicted 0 / -5 / -13 % (dense / 30 % / 50 %), and
+co-sim measured -4.3 / -11.7 / -14.7 % (Daniel, a50c1b2; hls/memory/ARCHITECTURE.md).
 """
 H = W = 16      # DW_H, DW_W
 C = 32          # DW_C
