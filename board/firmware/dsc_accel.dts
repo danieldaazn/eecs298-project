@@ -1,0 +1,66 @@
+// dsc_accel.dts — device-tree overlay that goes with dsc_accel.bit.bin (Kria Ubuntu,
+// loaded by `xmutil loadapp dsc_accel`; install.sh compiles it to dsc_accel.dtbo).
+//
+// Must agree with board/vivado/build_bd.tcl:
+//   - PL clock 0 at 200 MHz (zynqmp_clk 71 = pl0_ref)
+//   - S_AXI_HP0/HP1_FPD 128-bit (config-afi 4..7 = 0), M_AXI_HPM0/1_FPD at the preset's
+//     128 bits (config-afi 14 = 0xa00, the KR260 default)
+//   - dsc_top s_axi_control at 0xA000_0000, 64 KB
+//   - dsc_top interrupt on pl_ps_irq0[0] = GIC SPI 89, level high
+// The accelerator node is "generic-uio" so board/sw can map its registers and wait on
+// its interrupt from user space (install.sh loads uio_pdrv_genirq for that).
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target = <&fpga_full>;
+		overlay0: __overlay__ {
+			#address-cells = <2>;
+			#size-cells = <2>;
+			firmware-name = "dsc_accel.bit.bin";
+			pid = <0>;
+			uid = <0>;
+			resets = <&zynqmp_reset 116>, <&zynqmp_reset 117>,
+			         <&zynqmp_reset 118>, <&zynqmp_reset 119>;
+		};
+	};
+
+	fragment@1 {
+		target = <&amba>;
+		overlay1: __overlay__ {
+			afi0: afi0 {
+				compatible = "xlnx,afi-fpga";
+				config-afi = <0 0>, <1 0>, <2 0>, <3 0>, <4 0>, <5 0>, <6 0>, <7 0>,
+				             <8 0>, <9 0>, <10 0>, <11 0>, <12 0>, <13 0>,
+				             <14 0xa00>, <15 0x000>;
+			};
+			clocking0: clocking0 {
+				compatible = "xlnx,fclk";
+				#clock-cells = <0>;
+				clocks = <&zynqmp_clk 71>;
+				clock-output-names = "fabric_clk";
+				assigned-clocks = <&zynqmp_clk 71>;
+				assigned-clock-rates = <199998000>;
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&amba>;
+		overlay2: __overlay__ {
+			#address-cells = <2>;
+			#size-cells = <2>;
+			dsc_top_0: dsc_top@a0000000 {
+				compatible = "generic-uio";
+				reg = <0x0 0xa0000000 0x0 0x10000>;
+				clocks = <&zynqmp_clk 71>;
+				clock-names = "ap_clk";
+				interrupt-parent = <&gic>;
+				interrupts = <0 89 4>;
+				interrupt-names = "interrupt";
+			};
+		};
+	};
+};
